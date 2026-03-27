@@ -1,12 +1,24 @@
 import SceneKit
 import Foundation
 
-/// Controls the camera orbit, zoom, and GTA-style two-phase dive-in animation.
+/// Controls the camera orbit, zoom, and cinematic dive-in animation.
 @MainActor
 final class CameraController: ObservableObject {
     @Published var isDiving = false
     @Published var isDetailView = false
-    @Published var lockVerticalAxis = false
+    @Published var lockVerticalAxis = false {
+        didSet {
+            if lockVerticalAxis {
+                // Snap to level when lock is enabled
+                orbitAngleY = 0
+                animateCameraTo(
+                    position: computeCameraPosition(),
+                    lookAt: globeCenter,
+                    duration: 0.4
+                )
+            }
+        }
+    }
 
     private weak var cameraNode: SCNNode?
     private weak var globeNode: SCNNode?
@@ -14,6 +26,7 @@ final class CameraController: ObservableObject {
 
     // Globe center offset (globe is shifted up slightly to avoid HUD clipping)
     private let globeCenter = SCNVector3(0, 0.15, 0)
+    private let worldUp = SCNVector3(0, 1, 0)
 
     // Orbit state
     private var orbitAngleX: CGFloat = 0
@@ -54,7 +67,7 @@ final class CameraController: ObservableObject {
 
     func resetOrbit() {
         orbitAngleX = 0
-        orbitAngleY = 0.3
+        orbitAngleY = lockVerticalAxis ? 0 : 0.3
         zoomDistance = AppConstants.cameraDistance
         animateCameraTo(
             position: computeCameraPosition(),
@@ -117,7 +130,7 @@ final class CameraController: ObservableObject {
         SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeIn)
 
         cameraNode?.position = orbitPosition
-        cameraNode?.look(at: globeCenter)
+        pointCamera(at: globeCenter)
 
         SCNTransaction.completionBlock = { [weak self] in
             guard let self else { return }
@@ -128,7 +141,7 @@ final class CameraController: ObservableObject {
             SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
 
             self.cameraNode?.position = arcPosition
-            self.cameraNode?.look(at: self.globeCenter)
+            self.pointCamera(at: self.globeCenter)
 
             SCNTransaction.completionBlock = { [weak self] in
                 guard let self else { return }
@@ -139,7 +152,7 @@ final class CameraController: ObservableObject {
                 SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeOut)
 
                 self.cameraNode?.position = finalPosition
-                self.cameraNode?.look(at: self.globeCenter)
+                self.pointCamera(at: self.globeCenter)
                 // Widen FOV for more dramatic close-up
                 self.cameraNode?.camera?.fieldOfView = 50
 
@@ -181,7 +194,7 @@ final class CameraController: ObservableObject {
         SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
 
         cameraNode?.position = destination
-        cameraNode?.look(at: globeCenter)
+        pointCamera(at: globeCenter)
         // Restore default FOV
         cameraNode?.camera?.fieldOfView = 40
 
@@ -233,9 +246,15 @@ final class CameraController: ObservableObject {
 
     // MARK: - Helpers
 
+    /// Point camera at target with an explicit world-up constraint.
+    /// This prevents the camera from rolling, which would make the globe appear to tilt.
+    private func pointCamera(at target: SCNVector3) {
+        cameraNode?.look(at: target, up: worldUp, localFront: SCNVector3(0, 0, -1))
+    }
+
     private func updateCameraPosition() {
         cameraNode?.position = computeCameraPosition()
-        cameraNode?.look(at: globeCenter)
+        pointCamera(at: globeCenter)
     }
 
     private func computeCameraPosition() -> SCNVector3 {
@@ -245,12 +264,12 @@ final class CameraController: ObservableObject {
         return SCNVector3(x, y, z)
     }
 
-    private func animateCameraTo(position: SCNVector3, lookAt: SCNVector3, duration: TimeInterval) {
+    private func animateCameraTo(position: SCNVector3, lookAt target: SCNVector3, duration: TimeInterval) {
         SCNTransaction.begin()
         SCNTransaction.animationDuration = duration
         SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         cameraNode?.position = position
-        cameraNode?.look(at: lookAt)
+        pointCamera(at: target)
         SCNTransaction.commit()
     }
 

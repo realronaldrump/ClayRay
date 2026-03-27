@@ -41,7 +41,7 @@ final class GlobeScene: ObservableObject {
         cameraNode = SCNNode()
         cameraNode.camera = camera
         cameraNode.position = SCNVector3(0, 0, AppConstants.cameraDistance)
-        cameraNode.look(at: SCNVector3(0, 0.15, 0))
+        cameraNode.look(at: SCNVector3(0, 0.15, 0), up: SCNVector3(0, 1, 0), localFront: SCNVector3(0, 0, -1))
 
         // Lighting — warm, soft, clay-friendly
         let ambientNode = SCNNode()
