@@ -6,11 +6,13 @@ import Foundation
 final class CameraController: ObservableObject {
     @Published var isDiving = false
     @Published var isDetailView = false
+    @Published var invertControls = false
+    @Published var autoSpin = true
     @Published var lockVerticalAxis = false {
         didSet {
             if lockVerticalAxis {
-                // Snap to level when lock is enabled
-                orbitAngleY = 0
+                // Clamp to the tighter range when lock is enabled
+                orbitAngleY = max(-0.35, min(0.35, orbitAngleY))
                 animateCameraTo(
                     position: computeCameraPosition(),
                     lookAt: globeCenter,
@@ -50,17 +52,21 @@ final class CameraController: ObservableObject {
     func handleDrag(delta: CGSize) {
         guard !isDiving && !isDetailView else { return }
         let sensitivity: CGFloat = 0.005
-        orbitAngleX += delta.width * sensitivity
-        if !lockVerticalAxis {
-            orbitAngleY -= delta.height * sensitivity
-            orbitAngleY = max(-0.6, min(0.6, orbitAngleY))
-        }
+        let hMult: CGFloat = invertControls ? -1 : 1
+        let vMult: CGFloat = invertControls ? -1 : 1
+        orbitAngleX += delta.width * sensitivity * hMult
+        // When vertical axis is locked, still allow vertical panning but with a tighter clamp
+        // to prevent extreme tipping while allowing the user to view poles
+        let maxY: CGFloat = lockVerticalAxis ? 0.35 : 0.6
+        orbitAngleY -= delta.height * sensitivity * vMult
+        orbitAngleY = max(-maxY, min(maxY, orbitAngleY))
         updateCameraPosition()
     }
 
     func handleZoom(delta: CGFloat) {
         guard !isDiving && !isDetailView else { return }
-        zoomDistance -= delta * 0.05
+        let mult: CGFloat = invertControls ? -1 : 1
+        zoomDistance -= delta * 0.05 * mult
         zoomDistance = max(2.0, min(8.0, zoomDistance))
         updateCameraPosition()
     }
@@ -216,18 +222,22 @@ final class CameraController: ObservableObject {
         guard !isDiving && !isDetailView else { return }
         let step: CGFloat = 0.05
         let zoomStep: CGFloat = 0.2
+        let hMult: CGFloat = invertControls ? -1 : 1
+        let vMult: CGFloat = invertControls ? -1 : 1
 
         switch event.keyCode {
         case 123: // Left arrow
-            orbitAngleX -= step
+            orbitAngleX -= step * hMult
         case 124: // Right arrow
-            orbitAngleX += step
-        case 125 where !lockVerticalAxis: // Down arrow
-            orbitAngleY -= step
-            orbitAngleY = max(-0.6, orbitAngleY)
-        case 126 where !lockVerticalAxis: // Up arrow
-            orbitAngleY += step
-            orbitAngleY = min(0.6, orbitAngleY)
+            orbitAngleX += step * hMult
+        case 125: // Down arrow
+            let maxY: CGFloat = lockVerticalAxis ? 0.35 : 0.6
+            orbitAngleY -= step * vMult
+            orbitAngleY = max(-maxY, orbitAngleY)
+        case 126: // Up arrow
+            let maxY: CGFloat = lockVerticalAxis ? 0.35 : 0.6
+            orbitAngleY += step * vMult
+            orbitAngleY = min(maxY, orbitAngleY)
         case 24, 69: // + or numpad +
             zoomDistance -= zoomStep
             zoomDistance = max(2.0, zoomDistance)

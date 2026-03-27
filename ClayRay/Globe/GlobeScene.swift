@@ -15,6 +15,12 @@ final class GlobeScene: ObservableObject {
 
     /// Current UV overlay CGImage to composite as emission.
     private var currentUVOverlay: CGImage?
+    /// Current day/night overlay CGImage for the sunlight visualization.
+    private var currentDayNightOverlay: CGImage?
+    private var showSunlight = false
+    private var sunNode: SCNNode?
+    private var sunGlowNode: SCNNode?
+    private var sunTimer: Timer?
     /// Cached textures to avoid regenerating when only UV overlay changes.
     private var cachedBaseTexture: CGImage?
     private var cachedNormalMap: CGImage?
@@ -141,6 +147,13 @@ final class GlobeScene: ObservableObject {
             material.emission.intensity = 0.8
         }
 
+        // Day/night overlay as transparency mask
+        if showSunlight, let dayNight = currentDayNightOverlay {
+            material.transparent.contents = dayNight
+            material.transparent.intensity = 1.0
+            material.transparencyMode = .default
+        }
+
         // Clay PBR
         material.roughness.contents = 0.88
         material.metalness.contents = 0.01
@@ -180,6 +193,13 @@ final class GlobeScene: ObservableObject {
         if let uvOverlay = currentUVOverlay {
             material.emission.contents = uvOverlay
             material.emission.intensity = 1.2
+        }
+
+        // Day/night overlay as transparency mask
+        if showSunlight, let dayNight = currentDayNightOverlay {
+            material.transparent.contents = dayNight
+            material.transparent.intensity = 1.0
+            material.transparencyMode = .default
         }
 
         material.roughness.contents = 0.88
@@ -229,11 +249,99 @@ final class GlobeScene: ObservableObject {
     }
 
     /// Apply the current UV overlay to the emission channel without rebuilding the full material.
+    /// If sunlight is enabled, also apply the day/night overlay as a transparency mask.
     /// Fixed intensity — no animation, so it looks consistent regardless of zoom/angle.
     private func applyUVEmission() {
         guard let material = globeNode.geometry?.firstMaterial else { return }
         material.emission.contents = currentUVOverlay
         material.emission.intensity = 0.8
+
+        if showSunlight, let dayNight = currentDayNightOverlay {
+            material.transparent.contents = dayNight
+            material.transparent.intensity = 1.0
+            material.transparencyMode = .default
+        } else {
+            material.transparent.contents = nil
+        }
+    }
+
+    // MARK: - Sunlight Overlay
+
+    func updateSunlight(enabled: Bool) {
+        showSunlight = enabled
+        if enabled {
+            refreshSunlight()
+            // Update every 60 seconds
+            sunTimer?.invalidate()
+            sunTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    self?.refreshSunlight()
+                }
+            }
+        } else {
+            sunTimer?.invalidate()
+            sunTimer = nil
+            currentDayNightOverlay = nil
+            sunNode?.removeFromParentNode()
+            sunNode = nil
+            sunGlowNode?.removeFromParentNode()
+            sunGlowNode = nil
+            // Re-apply material without day/night overlay
+            applyUVEmission()
+        }
+    }
+
+    private func refreshSunlight() {
+        let now = Date()
+        currentDayNightOverlay = SunPosition.generateDayNightOverlay(date: now)
+        applyUVEmission()
+        updateSunNode(date: now)
+    }
+
+    private func updateSunNode(date: Date) {
+        let subsolar = SunPosition.subsolarPoint(at: date)
+        let sunDistance: CGFloat = 6.0
+        let latRad = subsolar.lat * .pi / 180
+        let lonRad = subsolar.lon * .pi / 180
+        let x = sunDistance * CGFloat(cos(latRad) * sin(lonRad))
+        let y = sunDistance * CGFloat(sin(latRad)) + 0.15  // Match globe center offset
+        let z = sunDistance * CGFloat(cos(latRad) * cos(lonRad))
+
+        if sunNode == nil {
+            // Sun sphere — bright emissive yellow-white
+            let sunSphere = SCNSphere(radius: 0.12)
+            let sunMaterial = SCNMaterial()
+            sunMaterial.diffuse.contents = NSColor(red: 1.0, green: 0.95, blue: 0.7, alpha: 1)
+            sunMaterial.emission.contents = NSColor(red: 1.0, green: 0.92, blue: 0.6, alpha: 1)
+            sunMaterial.emission.intensity = 2.0
+            sunMaterial.lightingModel = .constant
+            sunSphere.materials = [sunMaterial]
+
+            let node = SCNNode(geometry: sunSphere)
+            node.name = "sun"
+            scene.rootNode.addChildNode(node)
+            sunNode = node
+
+            // Glow halo around sun
+            let glowSphere = SCNSphere(radius: 0.35)
+            let glowMat = SCNMaterial()
+            glowMat.diffuse.contents = NSColor(red: 1.0, green: 0.95, blue: 0.6, alpha: 0.15)
+            glowMat.emission.contents = NSColor(red: 1.0, green: 0.90, blue: 0.5, alpha: 0.3)
+            glowMat.emission.intensity = 1.5
+            glowMat.lightingModel = .constant
+            glowMat.isDoubleSided = true
+            glowMat.blendMode = .add
+            glowMat.writesToDepthBuffer = false
+            glowSphere.materials = [glowMat]
+
+            let glowNode = SCNNode(geometry: glowSphere)
+            glowNode.name = "sunGlow"
+            scene.rootNode.addChildNode(glowNode)
+            sunGlowNode = glowNode
+        }
+
+        sunNode?.position = SCNVector3(x, y, z)
+        sunGlowNode?.position = SCNVector3(x, y, z)
     }
 
     // MARK: - Rotation

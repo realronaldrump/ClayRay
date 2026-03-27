@@ -54,18 +54,18 @@ final class UVDataService: ObservableObject {
     /// Fetch UV data for a grid of points across the globe to paint the full overlay.
     /// Uses Open-Meteo (free, no key, no rate limit) regardless of user's selected source.
     func fetchGlobalGrid() async {
-        // Dense grid: every 12° — ~330 points for smooth UV heatmap
+        // Denser grid: every 6° — ~1800 points for detailed UV heatmap
         var points: [(lat: Double, lon: Double, uvi: Double)] = []
 
         // Build grid coordinates
         var coords: [(Double, Double)] = []
-        for lat in stride(from: -60.0, through: 72.0, by: 12.0) {
-            for lon in stride(from: -180.0, through: 168.0, by: 12.0) {
+        for lat in stride(from: -60.0, through: 72.0, by: 6.0) {
+            for lon in stride(from: -180.0, through: 174.0, by: 6.0) {
                 coords.append((lat, lon))
             }
         }
 
-        // Fetch in batches of ~10 concurrent requests
+        // Fetch concurrently
         await withTaskGroup(of: (Double, Double, Double)?.self) { group in
             for (lat, lon) in coords {
                 group.addTask { [weak self] in

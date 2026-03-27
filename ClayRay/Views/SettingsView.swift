@@ -5,6 +5,9 @@ struct SettingsView: View {
     @Binding var selectedSource: UVDataSource
     @Binding var apiKey: String
     @AppStorage("lockVerticalAxis") var lockVerticalAxis = false
+    @AppStorage("invertControls") var invertControls = false
+    @AppStorage("autoSpin") var autoSpin = true
+    @AppStorage("showSunlight") var showSunlight = false
     @Environment(\.dismiss) var dismiss
     @Environment(\.colorScheme) var colorScheme
 
@@ -74,6 +77,39 @@ struct SettingsView: View {
                             }
                         }
                         .toggleStyle(.switch)
+
+                        Toggle(isOn: $invertControls) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Invert controls")
+                                    .font(ClayFonts.rounded(14, weight: .medium))
+                                Text("Reverse drag, scroll, and arrow key directions")
+                                    .font(ClayFonts.rounded(11))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        .toggleStyle(.switch)
+
+                        Toggle(isOn: $autoSpin) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Auto-spin")
+                                    .font(ClayFonts.rounded(14, weight: .medium))
+                                Text("Slowly rotate the globe when idle")
+                                    .font(ClayFonts.rounded(11))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        .toggleStyle(.switch)
+
+                        Toggle(isOn: $showSunlight) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Show sunlight")
+                                    .font(ClayFonts.rounded(14, weight: .medium))
+                                Text("Visualize day/night and sun position on the globe")
+                                    .font(ClayFonts.rounded(11))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        .toggleStyle(.switch)
                     }
 
                     Divider()
@@ -111,7 +147,7 @@ struct SettingsView: View {
                 .padding(20)
             }
         }
-        .frame(width: 400, height: 500)
+        .frame(width: 400, height: 620)
         .background(colorScheme == .dark ? ClayColors.panelBackgroundDark : ClayColors.panelBackground)
     }
 

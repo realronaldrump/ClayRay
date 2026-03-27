@@ -146,8 +146,8 @@ enum GlobeTextureGenerator {
     // MARK: - UV Overlay Texture
 
     static func generateUVOverlay(
-        width: Int = 2048,
-        height: Int = 1024,
+        width: Int = 4096,
+        height: Int = 2048,
         uvPoints: [(lat: Double, lon: Double, uvi: Double)] = [],
         userLat: Double? = nil,
         userLon: Double? = nil,
@@ -189,9 +189,9 @@ enum GlobeTextureGenerator {
 
             let (r, g, b) = uvGlowRGB(for: uvi)
 
-            // Large soft radii so adjacent grid points blend into a smooth heatmap
-            let radius = CGFloat(80 + uvi * 25)
-            let alpha = CGFloat(min(0.06 + uvi * 0.025, 0.35))
+            // Tighter radii for denser grid — sharper detail per data point
+            let radius = CGFloat(45 + uvi * 15)
+            let alpha = CGFloat(min(0.10 + uvi * 0.03, 0.55))
 
             // Soft radial glow — wide falloff for seamless blending
             let colors: [CGColor] = [
@@ -412,13 +412,40 @@ enum GlobeTextureGenerator {
     }
 
     private static func uvGlowRGB(for uvi: Double) -> (CGFloat, CGFloat, CGFloat) {
-        switch uvi {
-        case ..<3:  return (0.55, 0.50, 0.85)  // Cool lavender
-        case 3..<6: return (0.95, 0.78, 0.30)  // Warm golden
-        case 6..<8: return (0.95, 0.40, 0.18)  // Orange-red "toasted"
-        case 8..<11: return (0.95, 0.20, 0.10) // Intense glowing red
-        default:    return (1.00, 0.10, 0.05)  // Blazing extreme
+        // Smooth interpolation between UV color stops for accurate per-index coloring
+        let stops: [(uvi: Double, r: CGFloat, g: CGFloat, b: CGFloat)] = [
+            (0,  0.40, 0.45, 0.75),  // Deep cool blue-lavender
+            (1,  0.50, 0.55, 0.85),  // Cool lavender
+            (2,  0.55, 0.65, 0.80),  // Blue-teal transition
+            (3,  0.70, 0.80, 0.35),  // Yellow-green
+            (4,  0.90, 0.82, 0.30),  // Golden yellow
+            (5,  0.95, 0.75, 0.25),  // Warm amber
+            (6,  0.95, 0.55, 0.18),  // Orange
+            (7,  0.95, 0.40, 0.15),  // Dark orange
+            (8,  0.95, 0.28, 0.10),  // Red-orange
+            (9,  0.95, 0.18, 0.08),  // Deep red
+            (10, 0.92, 0.10, 0.10),  // Intense red
+            (11, 0.90, 0.05, 0.15),  // Crimson
+            (12, 1.00, 0.05, 0.20),  // Extreme magenta-red
+            (14, 1.00, 0.10, 0.40),  // Ultra-extreme violet-red
+        ]
+        let clamped = max(0, min(uvi, 14))
+        // Find surrounding color stops and interpolate
+        var lo = stops[0]
+        var hi = stops[stops.count - 1]
+        for i in 0..<(stops.count - 1) {
+            if clamped >= stops[i].uvi && clamped <= stops[i + 1].uvi {
+                lo = stops[i]
+                hi = stops[i + 1]
+                break
+            }
         }
+        let range = hi.uvi - lo.uvi
+        let t = range > 0 ? CGFloat((clamped - lo.uvi) / range) : 0
+        let r = lo.r + (hi.r - lo.r) * t
+        let g = lo.g + (hi.g - lo.g) * t
+        let b = lo.b + (hi.b - lo.b) * t
+        return (r, g, b)
     }
 
     private static func drawCracks(in ctx: CGContext, at center: CGPoint, uvi: Double, r: CGFloat, g: CGFloat, b: CGFloat) {

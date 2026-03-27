@@ -86,7 +86,9 @@ struct GlobeView: NSViewRepresentable {
     func updateNSView(_ nsView: GlobeScrollView, context: Context) {
         let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         if globeScene.isDarkMode != isDark {
-            globeScene.isDarkMode = isDark
+            DispatchQueue.main.async {
+                globeScene.isDarkMode = isDark
+            }
         }
     }
 

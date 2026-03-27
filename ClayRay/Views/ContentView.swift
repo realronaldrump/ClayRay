@@ -11,6 +11,9 @@ struct ContentView: View {
     @AppStorage("selectedSource") private var selectedSource: UVDataSource = .openMeteo
     @AppStorage("apiKey") private var apiKey: String = ""
     @AppStorage("lockVerticalAxis") private var lockVerticalAxis = false
+    @AppStorage("invertControls") private var invertControls = false
+    @AppStorage("autoSpin") private var autoSpin = true
+    @AppStorage("showSunlight") private var showSunlight = false
 
     @State private var showDetail = false
     @State private var showSettings = false
@@ -32,12 +35,33 @@ struct ContentView: View {
         .frame(minWidth: 600, minHeight: 400)
         .onAppear {
             locationManager.requestPermission()
-            globeScene.startIdleRotation()
+            if autoSpin {
+                globeScene.startIdleRotation()
+            }
             startDataFetching()
             cameraController.lockVerticalAxis = lockVerticalAxis
+            cameraController.invertControls = invertControls
+            cameraController.autoSpin = autoSpin
+            if showSunlight {
+                globeScene.updateSunlight(enabled: true)
+            }
         }
         .onChange(of: lockVerticalAxis) { _, newValue in
             cameraController.lockVerticalAxis = newValue
+        }
+        .onChange(of: invertControls) { _, newValue in
+            cameraController.invertControls = newValue
+        }
+        .onChange(of: autoSpin) { _, newValue in
+            cameraController.autoSpin = newValue
+            if newValue && !cameraController.isDetailView {
+                globeScene.startIdleRotation()
+            } else if !newValue {
+                globeScene.stopIdleRotation()
+            }
+        }
+        .onChange(of: showSunlight) { _, newValue in
+            globeScene.updateSunlight(enabled: newValue)
         }
         .onChange(of: locationManager.latitude) { _, _ in
             startDataFetching()
@@ -208,7 +232,9 @@ struct ContentView: View {
             withAnimation(.easeInOut(duration: 0.3)) {
                 showDetail = false
             }
-            globeScene.startIdleRotation()
+            if autoSpin {
+                globeScene.startIdleRotation()
+            }
             // Refetch for user's location
             Task {
                 await uvService.fetch(
@@ -234,4 +260,4 @@ private extension View {
     }
 }
 
-extension UVDataSource: @retroactive RawRepresentable {}
+extension UVDataSource: RawRepresentable {}
