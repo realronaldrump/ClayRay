@@ -146,98 +146,215 @@ enum GlobeTextureGenerator {
     // MARK: - UV Overlay Texture
 
     static func generateUVOverlay(
-        width: Int = 4096,
-        height: Int = 2048,
+        width: Int = 2048,
+        height: Int = 1024,
         uvPoints: [(lat: Double, lon: Double, uvi: Double)] = [],
         userLat: Double? = nil,
         userLon: Double? = nil,
         userUVI: Double? = nil
     ) -> CGImage? {
+        // When grid data is available, use smooth bilinear interpolation
+        if !uvPoints.isEmpty {
+            return generateGridInterpolatedOverlay(
+                width: width, height: height,
+                uvPoints: uvPoints,
+                userLat: userLat, userLon: userLon, userUVI: userUVI
+            )
+        }
+
+        // Fallback: single user-location glow while grid loads
+        guard let lat = userLat, let lon = userLon, let uvi = userUVI, uvi > 0.1 else { return nil }
+
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         guard let ctx = CGContext(
-            data: nil,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * 4,
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: width * 4,
             space: colorSpace,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return nil }
-
-        // Start fully transparent
         ctx.clear(CGRect(x: 0, y: 0, width: width, height: height))
 
-        var allPoints = uvPoints
-        if let lat = userLat, let lon = userLon, let uvi = userUVI, uvi > 0 {
-            allPoints.append((lat: lat, lon: lon, uvi: uvi))
+        let uv = WorldMapData.latLonToUV(lat: lat, lon: lon)
+        let x = CGFloat(uv.u * Double(width))
+        let y = CGFloat((1 - uv.v) * Double(height))
+        let (r, g, b) = uvGlowRGB(for: uvi)
+        let radius = CGFloat(60 + uvi * 20)
+        let alpha = CGFloat(min(0.15 + uvi * 0.04, 0.55))
+
+        let colors: [CGColor] = [
+            CGColor(red: r, green: g, blue: b, alpha: alpha),
+            CGColor(red: r, green: g, blue: b, alpha: alpha * 0.3),
+            CGColor(red: r, green: g, blue: b, alpha: 0)
+        ]
+        if let gradient = CGGradient(colorsSpace: colorSpace, colors: colors as CFArray, locations: [0, 0.4, 1.0]) {
+            ctx.drawRadialGradient(
+                gradient,
+                startCenter: CGPoint(x: x, y: y), startRadius: 0,
+                endCenter: CGPoint(x: x, y: y), endRadius: radius,
+                options: []
+            )
+        }
+        return ctx.makeImage()
+    }
+
+    /// Smooth bilinear-interpolated UV heatmap from the global grid data.
+    private static func generateGridInterpolatedOverlay(
+        width: Int, height: Int,
+        uvPoints: [(lat: Double, lon: Double, uvi: Double)],
+        userLat: Double?, userLon: Double?, userUVI: Double?
+    ) -> CGImage? {
+        // Grid dimensions matching UVDataService.fetchGlobalGrid()
+        let latMin = -60.0, latStep = 6.0
+        let lonMin = -180.0, lonStep = 6.0
+        let rows = 23   // lat -60 to 72 in 6° steps
+        let cols = 60    // lon -180 to 174 in 6° steps
+
+        // Populate grid from data points
+        var grid = Array(repeating: Array(repeating: -1.0, count: cols), count: rows)
+        for point in uvPoints {
+            let row = Int(round((point.lat - latMin) / latStep))
+            let col = Int(round((point.lon - lonMin) / lonStep))
+            guard row >= 0, row < rows, col >= 0, col < cols else { continue }
+            grid[row][col] = max(point.uvi, 0)
         }
 
-        // Determine if we have a user location to highlight
-        let isUserPoint: (Double, Double) -> Bool = { lat, lon in
-            guard let uLat = userLat, let uLon = userLon else { return false }
-            return abs(lat - uLat) < 1 && abs(lon - uLon) < 1
-        }
+        // Fill gaps from any failed API requests
+        fillMissingGridCells(&grid, rows: rows, cols: cols)
 
-        for point in allPoints {
-            guard point.uvi > 0.1 else { continue }
+        // Render smooth heatmap pixel-by-pixel via bilinear interpolation
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        var pixelData = [UInt8](repeating: 0, count: width * height * 4)
 
-            let uv = WorldMapData.latLonToUV(lat: point.lat, lon: point.lon)
-            let x = CGFloat(uv.u * Double(width))
-            let y = CGFloat((1 - uv.v) * Double(height))
-            let uvi = point.uvi
-            let isUser = isUserPoint(point.lat, point.lon)
+        for py in 0..<height {
+            // Row 0 in buffer = top of image = north pole
+            let lat = 90.0 - (Double(py) / Double(height)) * 180.0
+            for px in 0..<width {
+                let lon = (Double(px) / Double(width)) * 360.0 - 180.0
 
-            let (r, g, b) = uvGlowRGB(for: uvi)
-
-            // Tighter radii for denser grid — sharper detail per data point
-            let radius = CGFloat(45 + uvi * 15)
-            let alpha = CGFloat(min(0.10 + uvi * 0.03, 0.55))
-
-            // Soft radial glow — wide falloff for seamless blending
-            let colors: [CGColor] = [
-                CGColor(red: r, green: g, blue: b, alpha: alpha),
-                CGColor(red: r, green: g, blue: b, alpha: alpha * 0.4),
-                CGColor(red: r, green: g, blue: b, alpha: alpha * 0.08),
-                CGColor(red: r, green: g, blue: b, alpha: 0)
-            ]
-            let locations: [CGFloat] = [0, 0.25, 0.6, 1.0]
-
-            if let gradient = CGGradient(colorsSpace: colorSpace, colors: colors as CFArray, locations: locations) {
-                ctx.drawRadialGradient(
-                    gradient,
-                    startCenter: CGPoint(x: x, y: y), startRadius: 0,
-                    endCenter: CGPoint(x: x, y: y), endRadius: radius,
-                    options: []
+                let uvi = bilinearInterpolateGrid(
+                    grid, lat: lat, lon: lon,
+                    latMin: latMin, latStep: latStep, rows: rows,
+                    lonMin: lonMin, lonStep: lonStep, cols: cols
                 )
-            }
+                guard uvi > 0.05 else { continue }
 
-            // Hot center spot only for user's location or extreme UV
-            if isUser && uvi >= 3 {
-                let hotAlpha = CGFloat(min((uvi - 2) * 0.08, 0.4))
-                let hotRadius = radius * 0.2
-                let hotColors: [CGColor] = [
-                    CGColor(red: 1, green: 1, blue: min(r + 0.5, 1), alpha: hotAlpha),
-                    CGColor(red: r, green: g, blue: b, alpha: hotAlpha * 0.2),
-                    CGColor(red: r, green: g, blue: b, alpha: 0)
-                ]
-                let hotLocs: [CGFloat] = [0, 0.4, 1.0]
-                if let hotGrad = CGGradient(colorsSpace: colorSpace, colors: hotColors as CFArray, locations: hotLocs) {
-                    ctx.drawRadialGradient(
-                        hotGrad,
-                        startCenter: CGPoint(x: x, y: y), startRadius: 0,
-                        endCenter: CGPoint(x: x, y: y), endRadius: hotRadius,
-                        options: []
-                    )
-                }
+                let (r, g, b) = uvGlowRGB(for: uvi)
+                let alpha = CGFloat(min(0.12 + uvi * 0.045, 0.55))
 
-                // Cracks only at user location for extreme UV
-                if uvi >= 8 {
-                    drawCracks(in: ctx, at: CGPoint(x: x, y: y), uvi: uvi, r: r, g: g, b: b)
-                }
+                let offset = (py * width + px) * 4
+                pixelData[offset + 0] = UInt8(clamping: Int(r * alpha * 255))
+                pixelData[offset + 1] = UInt8(clamping: Int(g * alpha * 255))
+                pixelData[offset + 2] = UInt8(clamping: Int(b * alpha * 255))
+                pixelData[offset + 3] = UInt8(clamping: Int(alpha * 255))
             }
+        }
+
+        // Create base CGImage from pixel buffer
+        guard let provider = CGDataProvider(data: Data(pixelData) as CFData),
+              let baseImage = CGImage(
+                  width: width, height: height,
+                  bitsPerComponent: 8, bitsPerPixel: 32,
+                  bytesPerRow: width * 4, space: colorSpace,
+                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                  provider: provider, decode: nil,
+                  shouldInterpolate: true, intent: .defaultIntent
+              ) else { return nil }
+
+        // Add subtle user-location marker on top
+        guard let uLat = userLat, let uLon = userLon, let uUVI = userUVI, uUVI > 0 else {
+            return baseImage
+        }
+
+        guard let ctx = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return baseImage }
+
+        ctx.draw(baseImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        let uv = WorldMapData.latLonToUV(lat: uLat, lon: uLon)
+        let mx = CGFloat(uv.u * Double(width))
+        let my = CGFloat((1 - uv.v) * Double(height))
+        let (ur, ug, ub) = uvGlowRGB(for: uUVI)
+        let markerRadius = CGFloat(16)
+
+        let markerColors: [CGColor] = [
+            CGColor(red: 1, green: 1, blue: 0.92, alpha: 0.7),
+            CGColor(red: ur, green: ug, blue: ub, alpha: 0.25),
+            CGColor(red: ur, green: ug, blue: ub, alpha: 0)
+        ]
+        if let grad = CGGradient(colorsSpace: colorSpace, colors: markerColors as CFArray, locations: [0, 0.35, 1.0]) {
+            ctx.drawRadialGradient(
+                grad,
+                startCenter: CGPoint(x: mx, y: my), startRadius: 0,
+                endCenter: CGPoint(x: mx, y: my), endRadius: markerRadius,
+                options: []
+            )
         }
 
         return ctx.makeImage()
+    }
+
+    /// Bilinear interpolation of UV index from the sparse data grid.
+    private static func bilinearInterpolateGrid(
+        _ grid: [[Double]],
+        lat: Double, lon: Double,
+        latMin: Double, latStep: Double, rows: Int,
+        lonMin: Double, lonStep: Double, cols: Int
+    ) -> Double {
+        let rowF = (lat - latMin) / latStep
+
+        // Beyond one grid step outside the latitude range → 0
+        if rowF < -1.0 || rowF > Double(rows - 1) + 1.0 { return 0 }
+
+        // Wrap longitude into [0, cols)
+        var colF = (lon - lonMin) / lonStep
+        colF = colF.truncatingRemainder(dividingBy: Double(cols))
+        if colF < 0 { colF += Double(cols) }
+
+        let r0 = Int(floor(rowF))
+        let r1 = r0 + 1
+        let c0 = Int(floor(colF))
+        let c1 = (c0 + 1) % cols
+
+        let tr = rowF - floor(rowF)
+        let tc = colF - floor(colF)
+
+        func val(_ r: Int, _ c: Int) -> Double {
+            guard r >= 0, r < rows else { return 0 }
+            let safeC = ((c % cols) + cols) % cols
+            let v = grid[r][safeC]
+            return v < 0 ? 0 : v
+        }
+
+        let top = val(r0, c0) * (1 - tc) + val(r0, c1) * tc
+        let bot = val(r1, c0) * (1 - tc) + val(r1, c1) * tc
+        return top * (1 - tr) + bot * tr
+    }
+
+    /// Fill missing grid cells (from failed API requests) by averaging neighbors.
+    private static func fillMissingGridCells(_ grid: inout [[Double]], rows: Int, cols: Int) {
+        for _ in 0..<5 {
+            var anyMissing = false
+            for r in 0..<rows {
+                for c in 0..<cols {
+                    guard grid[r][c] < 0 else { continue }
+                    var sum = 0.0, count = 0
+                    for (nr, nc) in [(r-1, c), (r+1, c), (r, (c-1+cols)%cols), (r, (c+1)%cols)] {
+                        guard nr >= 0, nr < rows else { continue }
+                        if grid[nr][nc] >= 0 { sum += grid[nr][nc]; count += 1 }
+                    }
+                    if count > 0 {
+                        grid[r][c] = sum / Double(count)
+                    } else {
+                        anyMissing = true
+                    }
+                }
+            }
+            if !anyMissing { break }
+        }
     }
 
     // MARK: - Displacement / Height Map
