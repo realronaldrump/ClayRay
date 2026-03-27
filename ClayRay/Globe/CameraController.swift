@@ -201,37 +201,34 @@ final class CameraController: ObservableObject {
 
     func handleKeyboard(event: NSEvent) {
         guard !isDiving && !isDetailView else { return }
-        let step: CGFloat = 0.08
-        let zoomStep: CGFloat = 0.3
+        let step: CGFloat = 0.05
+        let zoomStep: CGFloat = 0.2
 
         switch event.keyCode {
         case 123: // Left arrow
             orbitAngleX -= step
-            updateCameraPosition()
         case 124: // Right arrow
             orbitAngleX += step
-            updateCameraPosition()
         case 125 where !lockVerticalAxis: // Down arrow
             orbitAngleY -= step
             orbitAngleY = max(-0.6, orbitAngleY)
-            updateCameraPosition()
         case 126 where !lockVerticalAxis: // Up arrow
             orbitAngleY += step
             orbitAngleY = min(0.6, orbitAngleY)
-            updateCameraPosition()
         case 24, 69: // + or numpad +
             zoomDistance -= zoomStep
             zoomDistance = max(2.0, zoomDistance)
-            updateCameraPosition()
         case 27, 78: // - or numpad -
             zoomDistance += zoomStep
             zoomDistance = min(8.0, zoomDistance)
-            updateCameraPosition()
         case 15: // R key — reset orbit
             resetOrbit()
+            return
         default:
-            break
+            return
         }
+        // Animate to new position for smooth glide instead of instant jump
+        animateCameraTo(position: computeCameraPosition(), lookAt: globeCenter, duration: 0.12)
     }
 
     // MARK: - Helpers

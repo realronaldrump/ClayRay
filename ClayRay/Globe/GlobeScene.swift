@@ -229,23 +229,11 @@ final class GlobeScene: ObservableObject {
     }
 
     /// Apply the current UV overlay to the emission channel without rebuilding the full material.
+    /// Fixed intensity — no animation, so it looks consistent regardless of zoom/angle.
     private func applyUVEmission() {
         guard let material = globeNode.geometry?.firstMaterial else { return }
         material.emission.contents = currentUVOverlay
         material.emission.intensity = 0.8
-        startUVPulse()
-    }
-
-    /// Subtle breathing pulse on UV glow — gently brighten/dim.
-    func startUVPulse() {
-        globeNode.removeAction(forKey: "uvPulse")
-        let pulse = SCNAction.customAction(duration: 4.0) { node, elapsed in
-            guard let mat = node.geometry?.firstMaterial else { return }
-            let t = elapsed / 4.0
-            // Gentle oscillation: 0.7 to 0.9
-            mat.emission.intensity = 0.8 + CGFloat(0.1 * sin(Double(t) * 2.0 * .pi))
-        }
-        globeNode.runAction(SCNAction.repeatForever(pulse), forKey: "uvPulse")
     }
 
     // MARK: - Rotation
