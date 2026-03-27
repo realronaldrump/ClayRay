@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @Binding var selectedSource: UVDataSource
     @Binding var apiKey: String
+    @AppStorage("lockVerticalAxis") var lockVerticalAxis = false
     @Environment(\.dismiss) var dismiss
     @Environment(\.colorScheme) var colorScheme
 
@@ -52,6 +53,27 @@ struct SettingsView: View {
                                 .font(ClayFonts.rounded(11))
                                 .foregroundStyle(.tertiary)
                         }
+                    }
+
+                    Divider()
+
+                    // Globe controls
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("GLOBE")
+                            .font(ClayFonts.rounded(11, weight: .bold))
+                            .foregroundStyle(.secondary)
+                            .tracking(1)
+
+                        Toggle(isOn: $lockVerticalAxis) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Lock vertical axis")
+                                    .font(ClayFonts.rounded(14, weight: .medium))
+                                Text("Only allow horizontal rotation — prevents the globe from tipping")
+                                    .font(ClayFonts.rounded(11))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        .toggleStyle(.switch)
                     }
 
                     Divider()

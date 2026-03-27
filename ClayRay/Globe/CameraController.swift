@@ -6,6 +6,7 @@ import Foundation
 final class CameraController: ObservableObject {
     @Published var isDiving = false
     @Published var isDetailView = false
+    @Published var lockVerticalAxis = false
 
     private weak var cameraNode: SCNNode?
     private weak var globeNode: SCNNode?
@@ -37,9 +38,10 @@ final class CameraController: ObservableObject {
         guard !isDiving && !isDetailView else { return }
         let sensitivity: CGFloat = 0.005
         orbitAngleX += delta.width * sensitivity
-        orbitAngleY -= delta.height * sensitivity
-        // Clamp to ±35° — keeps the globe upright, prevents disorienting tilt
-        orbitAngleY = max(-0.6, min(0.6, orbitAngleY))
+        if !lockVerticalAxis {
+            orbitAngleY -= delta.height * sensitivity
+            orbitAngleY = max(-0.6, min(0.6, orbitAngleY))
+        }
         updateCameraPosition()
     }
 
@@ -209,11 +211,11 @@ final class CameraController: ObservableObject {
         case 124: // Right arrow
             orbitAngleX += step
             updateCameraPosition()
-        case 125: // Down arrow
+        case 125 where !lockVerticalAxis: // Down arrow
             orbitAngleY -= step
             orbitAngleY = max(-0.6, orbitAngleY)
             updateCameraPosition()
-        case 126: // Up arrow
+        case 126 where !lockVerticalAxis: // Up arrow
             orbitAngleY += step
             orbitAngleY = min(0.6, orbitAngleY)
             updateCameraPosition()

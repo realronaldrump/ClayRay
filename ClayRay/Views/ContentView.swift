@@ -10,6 +10,7 @@ struct ContentView: View {
 
     @AppStorage("selectedSource") private var selectedSource: UVDataSource = .openMeteo
     @AppStorage("apiKey") private var apiKey: String = ""
+    @AppStorage("lockVerticalAxis") private var lockVerticalAxis = false
 
     @State private var showDetail = false
     @State private var showSettings = false
@@ -33,6 +34,10 @@ struct ContentView: View {
             locationManager.requestPermission()
             globeScene.startIdleRotation()
             startDataFetching()
+            cameraController.lockVerticalAxis = lockVerticalAxis
+        }
+        .onChange(of: lockVerticalAxis) { _, newValue in
+            cameraController.lockVerticalAxis = newValue
         }
         .onChange(of: locationManager.latitude) { _, _ in
             startDataFetching()
