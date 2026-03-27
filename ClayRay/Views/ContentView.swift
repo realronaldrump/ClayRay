@@ -1,7 +1,7 @@
 import SwiftUI
 import SceneKit
 
-/// Main container view: globe + HUD overlay, transitions to detail view.
+/// Main container view: globe + HUD, transitions to detail view on click.
 struct ContentView: View {
     @StateObject private var globeScene = GlobeScene()
     @StateObject private var cameraController = CameraController()
@@ -14,14 +14,11 @@ struct ContentView: View {
     @State private var showDetail = false
     @State private var showSettings = false
     @State private var detailLocationName: String = ""
-    @State private var clickedLat: Double = 0
-    @State private var clickedLon: Double = 0
 
     @Environment(\.colorScheme) var colorScheme
 
     var body: some View {
         ZStack {
-            // Background desk gradient
             deskBackground
 
             if showDetail {
@@ -42,10 +39,17 @@ struct ContentView: View {
         .onChange(of: selectedSource) { _, _ in
             startDataFetching()
         }
+        // Update globe overlay whenever UV data changes
+        .onChange(of: uvService.currentData) { _, newData in
+            updateGlobeOverlay(data: newData)
+        }
+        // Update globe overlay when global grid data arrives
+        .onChange(of: uvService.globalGridPoints.count) { _, _ in
+            updateGlobeOverlayWithGrid()
+        }
         .sheet(isPresented: $showSettings) {
             SettingsView(selectedSource: $selectedSource, apiKey: $apiKey)
         }
-        // Keyboard shortcuts
         .keyboardShortcut(KeyEquivalent("k"), modifiers: .command, action: diveToMyLocation)
         .onKeyPress(.escape) {
             if showDetail {
@@ -80,15 +84,15 @@ struct ContentView: View {
 
     private var detailLayout: some View {
         HStack(spacing: 0) {
-            // Left: zoomed globe (60%)
+            // Left: globe zoomed in close
             GlobeView(
                 globeScene: globeScene,
                 cameraController: cameraController,
-                onLocationClicked: nil
+                onLocationClicked: { _, _ in goBackToGlobe() }
             )
             .frame(maxWidth: .infinity)
 
-            // Right: detail panel (40%)
+            // Right: detail panel
             DetailView(
                 uvData: uvService.currentData,
                 locationName: detailLocationName.isEmpty ? locationManager.locationName : detailLocationName,
@@ -110,7 +114,7 @@ struct ContentView: View {
         .ignoresSafeArea()
     }
 
-    // MARK: - Actions
+    // MARK: - Data
 
     private func startDataFetching() {
         uvService.startAutoRefresh(
@@ -120,26 +124,35 @@ struct ContentView: View {
             apiKey: apiKey.isEmpty ? nil : apiKey,
             interval: AppConstants.refreshInterval
         )
+    }
 
-        // Update globe overlay when data arrives
-        Task {
-            // Small delay to let first fetch complete
-            try? await Task.sleep(for: .seconds(2))
-            updateGlobeOverlay()
+    private func updateGlobeOverlay(data: UVData) {
+        if uvService.globalGridPoints.isEmpty {
+            // Just user location until grid arrives
+            globeScene.updateUVOverlay(
+                userLat: data.latitude,
+                userLon: data.longitude,
+                userUVI: data.currentUVI
+            )
+        } else {
+            updateGlobeOverlayWithGrid()
         }
     }
 
-    private func updateGlobeOverlay() {
-        globeScene.updateUVOverlay(
-            userLat: locationManager.latitude,
-            userLon: locationManager.longitude,
-            userUVI: uvService.currentData.currentUVI
+    private func updateGlobeOverlayWithGrid() {
+        let data = uvService.currentData
+        globeScene.updateUVOverlayWithGrid(
+            uvService.globalGridPoints,
+            userLat: data.latitude,
+            userLon: data.longitude,
+            userUVI: data.currentUVI
         )
     }
 
+    // MARK: - Actions
+
     private func handleGlobeClick(lat: Double, lon: Double) {
-        clickedLat = lat
-        clickedLon = lon
+        guard !cameraController.isDiving else { return }
 
         // Fetch UV for clicked location
         Task {
@@ -151,7 +164,8 @@ struct ContentView: View {
             }
         }
 
-        // Animate dive-in
+        // Stop idle rotation and animate dive
+        globeScene.stopIdleRotation()
         cameraController.diveToLocation(lat: lat, lon: lon) {
             withAnimation(.easeInOut(duration: 0.3)) {
                 showDetail = true
@@ -160,11 +174,9 @@ struct ContentView: View {
     }
 
     private func diveToMyLocation() {
-        clickedLat = locationManager.latitude
-        clickedLon = locationManager.longitude
+        guard !cameraController.isDiving else { return }
         detailLocationName = locationManager.locationName
 
-        // Refetch for user's location
         Task {
             await uvService.fetch(
                 latitude: locationManager.latitude,
@@ -174,6 +186,7 @@ struct ContentView: View {
             )
         }
 
+        globeScene.stopIdleRotation()
         cameraController.diveToLocation(lat: locationManager.latitude, lon: locationManager.longitude) {
             withAnimation(.easeInOut(duration: 0.3)) {
                 showDetail = true
@@ -186,14 +199,21 @@ struct ContentView: View {
             withAnimation(.easeInOut(duration: 0.3)) {
                 showDetail = false
             }
-            // Refetch user location data and update overlay
-            startDataFetching()
+            globeScene.startIdleRotation()
+            // Refetch for user's location
+            Task {
+                await uvService.fetch(
+                    latitude: locationManager.latitude,
+                    longitude: locationManager.longitude,
+                    source: selectedSource,
+                    apiKey: apiKey.isEmpty ? nil : apiKey
+                )
+            }
         }
     }
 }
 
-// MARK: - Keyboard Shortcut Extension
-
+// Hidden button trick for ⌘K shortcut
 private extension View {
     func keyboardShortcut(_ key: KeyEquivalent, modifiers: EventModifiers, action: @escaping () -> Void) -> some View {
         self.background(
@@ -205,8 +225,4 @@ private extension View {
     }
 }
 
-// MARK: - AppStorage Conformance for UVDataSource
-
-extension UVDataSource: @retroactive RawRepresentable {
-    // Already RawRepresentable via String enum, AppStorage works natively
-}
+extension UVDataSource: @retroactive RawRepresentable {}

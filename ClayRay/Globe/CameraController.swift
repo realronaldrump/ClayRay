@@ -1,7 +1,7 @@
 import SceneKit
 import Foundation
 
-/// Controls the camera orbit, zoom, and GTA-style dive-in animation.
+/// Controls the camera orbit, zoom, and GTA-style two-phase dive-in animation.
 @MainActor
 final class CameraController: ObservableObject {
     @Published var isDiving = false
@@ -57,8 +57,10 @@ final class CameraController: ObservableObject {
         )
     }
 
-    // MARK: - GTA-Style Dive-In Animation
+    // MARK: - GTA-Style Two-Phase Dive Animation
 
+    /// Phase 1 (0.4s): Arc upward + rotate globe so target faces camera
+    /// Phase 2 (0.8s): Zoom in close with ease-in-out
     func diveToLocation(lat: Double, lon: Double, completion: @escaping () -> Void) {
         guard !isDiving else { return }
         isDiving = true
@@ -67,41 +69,63 @@ final class CameraController: ObservableObject {
         savedOrbitY = orbitAngleY
         savedZoom = zoomDistance
 
-        let targetPos = latLonToPosition(lat: lat, lon: lon, radius: AppConstants.globeRadius)
+        let targetOnSurface = latLonToPosition(lat: lat, lon: lon, radius: AppConstants.globeRadius)
         let r = AppConstants.globeRadius
 
-        let cameraOffset: CGFloat = 1.8
-        let normalizedTarget = SCNVector3(
-            targetPos.x / r,
-            targetPos.y / r,
-            targetPos.z / r
-        )
-        let cameraDestination = SCNVector3(
-            normalizedTarget.x * cameraOffset,
-            normalizedTarget.y * cameraOffset,
-            normalizedTarget.z * cameraOffset
+        // Normalize to get direction
+        let nx = targetOnSurface.x / r
+        let ny = targetOnSurface.y / r
+        let nz = targetOnSurface.z / r
+
+        // Phase 1 destination: pull back + arc upward
+        let arcDistance: CGFloat = zoomDistance * 1.15  // Pull back slightly
+        let arcHeight: CGFloat = 0.4  // Arc up
+        let arcPosition = SCNVector3(
+            nx * arcDistance * 0.5,
+            ny * arcDistance * 0.5 + arcHeight,
+            nz * arcDistance * 0.5 + arcDistance * 0.7
         )
 
-        globeNode?.removeAction(forKey: "idleRotation")
+        // Phase 2 destination: close to surface, hovering over target
+        let hoverDistance: CGFloat = 1.75
+        let finalPosition = SCNVector3(
+            nx * hoverDistance,
+            ny * hoverDistance,
+            nz * hoverDistance
+        )
 
+        // Phase 1: Arc up and rotate (0.4s)
         SCNTransaction.begin()
-        SCNTransaction.animationDuration = AppConstants.diveAnimationDuration
-        SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        SCNTransaction.animationDuration = 0.4
+        SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeIn)
 
-        cameraNode?.position = cameraDestination
+        cameraNode?.position = arcPosition
         cameraNode?.look(at: SCNVector3Zero)
 
         SCNTransaction.completionBlock = { [weak self] in
-            Task { @MainActor in
-                self?.isDiving = false
-                self?.isDetailView = true
-                completion()
+            // Phase 2: Zoom in to surface (0.8s)
+            SCNTransaction.begin()
+            SCNTransaction.animationDuration = 0.8
+            SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeOut)
+
+            self?.cameraNode?.position = finalPosition
+            self?.cameraNode?.look(at: SCNVector3Zero)
+
+            SCNTransaction.completionBlock = {
+                Task { @MainActor in
+                    self?.isDiving = false
+                    self?.isDetailView = true
+                    completion()
+                }
             }
+
+            SCNTransaction.commit()
         }
 
         SCNTransaction.commit()
     }
 
+    /// Reverse: smooth zoom-out back to full globe.
     func diveOut(completion: @escaping () -> Void) {
         guard isDetailView else { return }
         isDiving = true
@@ -113,7 +137,7 @@ final class CameraController: ObservableObject {
         let destination = computeCameraPosition()
 
         SCNTransaction.begin()
-        SCNTransaction.animationDuration = AppConstants.diveAnimationDuration
+        SCNTransaction.animationDuration = 1.0
         SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
 
         cameraNode?.position = destination
@@ -123,19 +147,11 @@ final class CameraController: ObservableObject {
             Task { @MainActor in
                 self?.isDiving = false
                 self?.isDetailView = false
-                self?.globeNode?.runAction(
-                    SCNAction.repeatForever(SCNAction.rotateBy(x: 0, y: .pi * 2, z: 0, duration: 120)),
-                    forKey: "idleRotation"
-                )
                 completion()
             }
         }
 
         SCNTransaction.commit()
-    }
-
-    func diveToCurrentLocation(lat: Double, lon: Double, completion: @escaping () -> Void) {
-        diveToLocation(lat: lat, lon: lon, completion: completion)
     }
 
     // MARK: - Helpers
