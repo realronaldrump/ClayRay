@@ -147,11 +147,9 @@ final class GlobeScene: ObservableObject {
             material.emission.intensity = 0.8
         }
 
-        // Day/night overlay as transparency mask
+        // Day/night overlay darkens the night side via multiply
         if showSunlight, let dayNight = currentDayNightOverlay {
-            material.transparent.contents = dayNight
-            material.transparent.intensity = 1.0
-            material.transparencyMode = .default
+            material.multiply.contents = dayNight
         }
 
         // Clay PBR
@@ -195,11 +193,9 @@ final class GlobeScene: ObservableObject {
             material.emission.intensity = 1.2
         }
 
-        // Day/night overlay as transparency mask
+        // Day/night overlay darkens the night side via multiply
         if showSunlight, let dayNight = currentDayNightOverlay {
-            material.transparent.contents = dayNight
-            material.transparent.intensity = 1.0
-            material.transparencyMode = .default
+            material.multiply.contents = dayNight
         }
 
         material.roughness.contents = 0.88
@@ -257,11 +253,9 @@ final class GlobeScene: ObservableObject {
         material.emission.intensity = 0.8
 
         if showSunlight, let dayNight = currentDayNightOverlay {
-            material.transparent.contents = dayNight
-            material.transparent.intensity = 1.0
-            material.transparencyMode = .default
+            material.multiply.contents = dayNight
         } else {
-            material.transparent.contents = nil
+            material.multiply.contents = nil
         }
     }
 

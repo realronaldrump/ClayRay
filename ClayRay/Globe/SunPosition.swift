@@ -53,8 +53,9 @@ enum SunPosition {
         return (lat: declination, lon: subLon)
     }
 
-    /// Generate a day/night overlay texture. Dark side is a semi-transparent dark tint.
-    /// The terminator line includes a smooth twilight gradient.
+    /// Generate a day/night multiply texture. Night side darkens the surface;
+    /// day side is white (no change). Used with `material.multiply`.
+    /// The terminator line includes a warm golden glow at the sunset/sunrise boundary.
     static func generateDayNightOverlay(width: Int = 4096, height: Int = 2048, date: Date = Date()) -> CGImage? {
         let subsolar = subsolarPoint(at: date)
         let subLatRad = subsolar.lat * .pi / 180
@@ -71,10 +72,9 @@ enum SunPosition {
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return nil }
 
-        // Start fully transparent
-        ctx.clear(CGRect(x: 0, y: 0, width: width, height: height))
+        ctx.setFillColor(NSColor.white.cgColor)
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
 
-        // Direct pixel buffer access for performance
         guard let data = ctx.data else { return nil }
         let buffer = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
 
@@ -87,60 +87,40 @@ enum SunPosition {
                 let lon = (u - 0.5) * 2 * .pi  // -pi to pi
                 let lonDiff = lon - subLonDeg * .pi / 180
 
-                // Solar elevation angle approximation
                 let cosZenith = sin(lat) * sin(subLatRad) + cos(lat) * cos(subLatRad) * cos(lonDiff)
 
-                // cosZenith > 0 = day, < 0 = night
-                // Smooth twilight band: civil twilight at ~6° below horizon
-                let twilightWidth = 0.12  // ~7° smooth transition
+                let twilightWidth = 0.12
                 let darkness: Double
                 if cosZenith > twilightWidth {
-                    darkness = 0  // Full day
+                    darkness = 0
                 } else if cosZenith < -twilightWidth {
-                    darkness = 1  // Full night
+                    darkness = 1
                 } else {
-                    // Smooth transition through twilight
                     darkness = (1 - (cosZenith + twilightWidth) / (2 * twilightWidth))
                 }
 
-                if darkness > 0.01 {
-                    let offset = (py * width + px) * 4
-                    let alpha = UInt8(min(darkness * 0.55, 0.55) * 255)  // Max 55% opacity for night
-                    // Dark blue-black tint
-                    buffer[offset + 0] = UInt8(min(darkness * 8, 15))     // R
-                    buffer[offset + 1] = UInt8(min(darkness * 12, 20))    // G
-                    buffer[offset + 2] = UInt8(min(darkness * 30, 45))    // B
-                    buffer[offset + 3] = alpha                             // A
-                }
-            }
-        }
+                let offset = (py * width + px) * 4
 
-        // Draw terminator line — a subtle glowing edge at the sunset/sunrise boundary
-        for py in 0..<height {
-            let v = Double(py) / Double(height)
-            let lat = (0.5 - v) * .pi
+                // Multiply blending: white = no change, darker = darkens surface
+                // Night side gets a dark blue-gray tint (not fully black)
+                let nightR = 0.18
+                let nightG = 0.20
+                let nightB = 0.28
+                let r = 1.0 - darkness * (1.0 - nightR)
+                let g = 1.0 - darkness * (1.0 - nightG)
+                let b = 1.0 - darkness * (1.0 - nightB)
 
-            for px in 0..<width {
-                let u = Double(px) / Double(width)
-                let lon = (u - 0.5) * 2 * .pi
-                let lonDiff = lon - subLonDeg * .pi / 180
-                let cosZenith = sin(lat) * sin(subLatRad) + cos(lat) * cos(subLatRad) * cos(lonDiff)
-
-                // Terminator glow band
+                // Warm golden terminator glow near the boundary
                 let terminatorDist = abs(cosZenith)
-                if terminatorDist < 0.04 {
-                    let glow = 1.0 - (terminatorDist / 0.04)
-                    let offset = (py * width + px) * 4
-                    let existing = Double(buffer[offset + 3]) / 255.0
-                    // Warm golden terminator glow
-                    let glowAlpha = glow * 0.35
-                    if glowAlpha > existing {
-                        buffer[offset + 0] = UInt8(min(255, Int(Double(buffer[offset + 0]) + glow * 200)))
-                        buffer[offset + 1] = UInt8(min(255, Int(Double(buffer[offset + 1]) + glow * 140)))
-                        buffer[offset + 2] = UInt8(min(255, Int(Double(buffer[offset + 2]) + glow * 40)))
-                        buffer[offset + 3] = UInt8(min(255, Int(glowAlpha * 255)))
-                    }
-                }
+                let glow = terminatorDist < 0.04 ? 1.0 - (terminatorDist / 0.04) : 0.0
+                let glowR = min(1.0, r + glow * 0.25)
+                let glowG = min(1.0, g + glow * 0.15)
+                let glowB = min(1.0, b + glow * 0.02)
+
+                buffer[offset + 0] = UInt8(glowR * 255)
+                buffer[offset + 1] = UInt8(glowG * 255)
+                buffer[offset + 2] = UInt8(glowB * 255)
+                buffer[offset + 3] = 255  // Fully opaque
             }
         }
 
