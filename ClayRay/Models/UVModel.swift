@@ -78,16 +78,6 @@ enum UVLevel: String {
         }
     }
 
-    /// Natural language description for the UV level
-    var summary: String {
-        switch self {
-        case .low: return "Minimal sun exposure risk"
-        case .moderate: return "Wear sunscreen outdoors"
-        case .high: return "Limit midday sun exposure"
-        case .veryHigh: return "Avoid prolonged sun exposure"
-        case .extreme: return "Stay in shade if possible"
-        }
-    }
 }
 
 enum UVTrend {

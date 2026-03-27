@@ -5,8 +5,8 @@ import SceneKit
 struct ContentView: View {
     @StateObject private var globeScene = GlobeScene()
     @StateObject private var cameraController = CameraController()
-    @StateObject private var uvService = UVDataService()
-    @StateObject private var locationManager = LocationManager()
+    @EnvironmentObject var uvService: UVDataService
+    @EnvironmentObject var locationManager: LocationManager
 
     @AppStorage("selectedSource") private var selectedSource: UVDataSource = .openMeteo
     @AppStorage("apiKey") private var apiKey: String = ""
@@ -14,6 +14,7 @@ struct ContentView: View {
     @State private var showDetail = false
     @State private var showSettings = false
     @State private var detailLocationName: String = ""
+    @State private var scnViewRef: SCNView?
 
     @Environment(\.colorScheme) var colorScheme
 
@@ -69,7 +70,8 @@ struct ContentView: View {
                 cameraController: cameraController,
                 onLocationClicked: { lat, lon in
                     handleGlobeClick(lat: lat, lon: lon)
-                }
+                },
+                onViewReady: { view in scnViewRef = view }
             )
 
             HUDView(
@@ -77,6 +79,7 @@ struct ContentView: View {
                 locationName: locationManager.locationName,
                 onMyLocation: diveToMyLocation,
                 onResetOrbit: { cameraController.resetOrbit() },
+                onExportPNG: { if let view = scnViewRef { globeScene.exportPNG(from: view) } },
                 onSettings: { showSettings = true }
             )
         }
@@ -96,6 +99,7 @@ struct ContentView: View {
             DetailView(
                 uvData: uvService.currentData,
                 locationName: detailLocationName.isEmpty ? locationManager.locationName : detailLocationName,
+                isLoading: uvService.isLoading,
                 onBack: goBackToGlobe
             )
             .frame(maxWidth: .infinity)

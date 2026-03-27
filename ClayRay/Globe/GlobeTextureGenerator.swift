@@ -236,6 +236,85 @@ enum GlobeTextureGenerator {
         return ctx.makeImage()
     }
 
+    // MARK: - Displacement / Height Map
+
+    /// Generate a heightmap for topographic depth: land is light (raised), ocean is dark (depressed).
+    /// Mountain ranges get brighter spots for extra relief.
+    static func generateHeightMap(width: Int = 2048, height: Int = 1024) -> CGImage? {
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        // Ocean baseline — mid-gray (no displacement)
+        ctx.setFillColor(CGColor(red: 0.35, green: 0.35, blue: 0.35, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+
+        // Ocean depth variation — subtle darker patches
+        var gen = SystemRandomNumberGenerator()
+        for _ in 0..<80 {
+            let cx = CGFloat.random(in: 0...CGFloat(width), using: &gen)
+            let cy = CGFloat.random(in: 0...CGFloat(height), using: &gen)
+            let radius = CGFloat.random(in: 40...150, using: &gen)
+            ctx.setFillColor(CGColor(red: 0.28, green: 0.28, blue: 0.28, alpha: 0.3))
+            ctx.fillEllipse(in: CGRect(x: cx - radius, y: cy - radius, width: radius * 2, height: radius * 2))
+        }
+
+        // Continents raised — lighter gray
+        for continent in WorldMapData.continents {
+            let path = continentPath(continent, width: width, height: height)
+
+            // Base land height
+            ctx.setFillColor(CGColor(red: 0.6, green: 0.6, blue: 0.6, alpha: 1))
+            ctx.addPath(path)
+            ctx.fillPath()
+
+            // Continental shelf gradient (slightly raised at edges)
+            ctx.setStrokeColor(CGColor(red: 0.55, green: 0.55, blue: 0.55, alpha: 0.7))
+            ctx.setLineWidth(8)
+            ctx.addPath(path)
+            ctx.strokePath()
+        }
+
+        // Mountain ridges — bright spots at key mountain range areas
+        let mountainRanges: [(lat: Double, lon: Double, radius: CGFloat, height: CGFloat)] = [
+            (35, -106, 60, 0.82),   // Rockies
+            (46, 8, 40, 0.78),      // Alps
+            (28, 85, 50, 0.90),     // Himalayas
+            (-15, -70, 55, 0.80),   // Andes
+            (62, 60, 45, 0.72),     // Urals
+            (-5, 37, 30, 0.70),     // East African Rift
+            (36, 52, 35, 0.72),     // Iranian Plateau
+            (-42, 170, 25, 0.68),   // Southern Alps NZ
+        ]
+
+        for mtn in mountainRanges {
+            let uv = WorldMapData.latLonToUV(lat: mtn.lat, lon: mtn.lon)
+            let x = CGFloat(uv.u * Double(width))
+            let y = CGFloat((1 - uv.v) * Double(height))
+            let colors: [CGColor] = [
+                CGColor(red: mtn.height, green: mtn.height, blue: mtn.height, alpha: 0.8),
+                CGColor(red: 0.6, green: 0.6, blue: 0.6, alpha: 0)
+            ]
+            if let gradient = CGGradient(colorsSpace: colorSpace, colors: colors as CFArray, locations: [0, 1]) {
+                ctx.drawRadialGradient(
+                    gradient,
+                    startCenter: CGPoint(x: x, y: y), startRadius: 0,
+                    endCenter: CGPoint(x: x, y: y), endRadius: mtn.radius,
+                    options: []
+                )
+            }
+        }
+
+        return ctx.makeImage()
+    }
+
     // MARK: - Private Helpers
 
     private static func continentPath(_ continent: WorldMapData.ContinentPath, width: Int, height: Int) -> CGPath {

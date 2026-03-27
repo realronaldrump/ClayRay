@@ -1,37 +1,36 @@
 import SceneKit
 import AppKit
+import UniformTypeIdentifiers
 
 /// Manages the SceneKit globe: geometry, materials, lighting, and UV overlay.
 @MainActor
 final class GlobeScene: ObservableObject {
     let scene: SCNScene
     let globeNode: SCNNode
-    let uvOverlayNode: SCNNode
     let cameraNode: SCNNode
-    let ambientLightNode: SCNNode
-    let keyLightNode: SCNNode
-    let rimLightNode: SCNNode
-    let fillLightNode: SCNNode
 
     @Published var isDarkMode = false {
-        didSet { updateAppearance() }
+        didSet { refreshTexture() }
     }
+
+    /// Current UV overlay CGImage to composite as emission.
+    private var currentUVOverlay: CGImage?
+    /// Cached textures to avoid regenerating when only UV overlay changes.
+    private var cachedBaseTexture: CGImage?
+    private var cachedNormalMap: CGImage?
+    private var cachedHeightMap: CGImage?
 
     init() {
         scene = SCNScene()
         scene.background.contents = NSColor.clear
 
-        // Globe sphere — moderate segment count for smooth-enough clay
+        // Globe sphere
         let sphere = SCNSphere(radius: AppConstants.globeRadius)
-        sphere.segmentCount = 72
+        sphere.segmentCount = 96
         globeNode = SCNNode(geometry: sphere)
         globeNode.name = "globe"
-
-        // UV overlay sphere — slightly larger, additive blended
-        let overlaySphere = SCNSphere(radius: AppConstants.globeRadius * 1.003)
-        overlaySphere.segmentCount = 72
-        uvOverlayNode = SCNNode(geometry: overlaySphere)
-        uvOverlayNode.name = "uvOverlay"
+        // Shift globe up slightly so HUD doesn't clip the bottom
+        globeNode.position = SCNVector3(0, 0.15, 0)
 
         // Camera
         let camera = SCNCamera()
@@ -42,17 +41,17 @@ final class GlobeScene: ObservableObject {
         cameraNode = SCNNode()
         cameraNode.camera = camera
         cameraNode.position = SCNVector3(0, 0, AppConstants.cameraDistance)
-        cameraNode.look(at: SCNVector3Zero)
+        cameraNode.look(at: SCNVector3(0, 0.15, 0))
 
         // Lighting — warm, soft, clay-friendly
-        ambientLightNode = SCNNode()
+        let ambientNode = SCNNode()
         let ambient = SCNLight()
         ambient.type = .ambient
         ambient.intensity = 500
-        ambient.color = NSColor(red: 1.0, green: 0.97, blue: 0.92, alpha: 1) // warm
-        ambientLightNode.light = ambient
+        ambient.color = NSColor(red: 1.0, green: 0.97, blue: 0.92, alpha: 1)
+        ambientNode.light = ambient
 
-        keyLightNode = SCNNode()
+        let keyNode = SCNNode()
         let key = SCNLight()
         key.type = .directional
         key.intensity = 900
@@ -61,156 +60,205 @@ final class GlobeScene: ObservableObject {
         key.shadowRadius = 12
         key.shadowSampleCount = 8
         key.shadowColor = NSColor(white: 0, alpha: 0.25)
-        keyLightNode.light = key
-        keyLightNode.position = SCNVector3(3, 5, 4)
-        keyLightNode.look(at: SCNVector3Zero)
+        keyNode.light = key
+        keyNode.position = SCNVector3(3, 5, 4)
+        keyNode.look(at: SCNVector3Zero)
 
-        rimLightNode = SCNNode()
+        let rimNode = SCNNode()
         let rim = SCNLight()
         rim.type = .directional
         rim.intensity = 350
         rim.color = NSColor(red: 1.0, green: 0.92, blue: 0.85, alpha: 1)
-        rimLightNode.light = rim
-        rimLightNode.position = SCNVector3(-3, 1, -3)
-        rimLightNode.look(at: SCNVector3Zero)
+        rimNode.light = rim
+        rimNode.position = SCNVector3(-3, 1, -3)
+        rimNode.look(at: SCNVector3Zero)
 
-        fillLightNode = SCNNode()
+        let fillNode = SCNNode()
         let fill = SCNLight()
         fill.type = .directional
         fill.intensity = 200
-        fill.color = NSColor(red: 0.85, green: 0.90, blue: 1.0, alpha: 1) // cool fill
-        fillLightNode.light = fill
-        fillLightNode.position = SCNVector3(-2, -3, 2)
-        fillLightNode.look(at: SCNVector3Zero)
+        fill.color = NSColor(red: 0.85, green: 0.90, blue: 1.0, alpha: 1)
+        fillNode.light = fill
+        fillNode.position = SCNVector3(-2, -3, 2)
+        fillNode.look(at: SCNVector3Zero)
 
-        // Assemble scene
+        // Assemble
         scene.rootNode.addChildNode(globeNode)
-        scene.rootNode.addChildNode(uvOverlayNode)
         scene.rootNode.addChildNode(cameraNode)
-        scene.rootNode.addChildNode(ambientLightNode)
-        scene.rootNode.addChildNode(keyLightNode)
-        scene.rootNode.addChildNode(rimLightNode)
-        scene.rootNode.addChildNode(fillLightNode)
+        scene.rootNode.addChildNode(ambientNode)
+        scene.rootNode.addChildNode(keyNode)
+        scene.rootNode.addChildNode(rimNode)
+        scene.rootNode.addChildNode(fillNode)
 
-        // Shadow-receiving floor plane
-        let shadowPlane = SCNPlane(width: 6, height: 6)
-        let shadowMaterial = SCNMaterial()
-        shadowMaterial.diffuse.contents = NSColor.clear
-        shadowMaterial.colorBufferWriteMask = []
-        shadowMaterial.writesToDepthBuffer = true
-        shadowPlane.materials = [shadowMaterial]
-        let shadowNode = SCNNode(geometry: shadowPlane)
-        shadowNode.position = SCNVector3(0, -1.5, 0)
-        shadowNode.eulerAngles.x = -.pi / 2
-        scene.rootNode.addChildNode(shadowNode)
+        // Apply initial procedural texture while real one downloads
+        applyProceduralMaterial(isDark: false)
 
-        // Apply materials
-        applyClayMaterial(isDark: false)
-        applyUVOverlayMaterial()
+        // Start downloading real NASA texture
+        Task {
+            await loadRealTexture(isDark: false)
+        }
     }
 
-    // MARK: - Clay Material
+    // MARK: - Texture Loading
 
-    func applyClayMaterial(isDark: Bool) {
+    /// Download real earth texture and apply clay grading.
+    private func loadRealTexture(isDark: Bool) async {
+        if let clayTexture = await EarthTextureLoader.shared.loadClayTexture(isDark: isDark) {
+            applyMaterial(baseTexture: clayTexture)
+        }
+    }
+
+    private func refreshTexture() {
+        Task {
+            if let clayTexture = await EarthTextureLoader.shared.loadClayTexture(isDark: isDarkMode) {
+                applyMaterial(baseTexture: clayTexture)
+            } else {
+                applyProceduralMaterial(isDark: isDarkMode)
+            }
+        }
+    }
+
+    // MARK: - Materials
+
+    private func applyMaterial(baseTexture: CGImage) {
         let material = SCNMaterial()
         material.lightingModel = .physicallyBased
 
-        // Base color from procedural texture generator
-        if let baseTexture = GlobeTextureGenerator.generateBaseTexture(isDark: isDark) {
-            material.diffuse.contents = baseTexture
-        } else {
-            // Fallback solid color
-            material.diffuse.contents = isDark
-                ? NSColor(red: 0.52, green: 0.48, blue: 0.44, alpha: 1)
-                : NSColor(red: 0.76, green: 0.42, blue: 0.30, alpha: 1)
-        }
+        material.diffuse.contents = baseTexture
         material.diffuse.wrapS = .repeat
         material.diffuse.wrapT = .repeat
 
-        // Normal map for clay imperfections (thumbprints, bumps)
-        if let normalMap = GlobeTextureGenerator.generateNormalMap() {
+        // Normal map for clay surface imperfections (cached)
+        if let normalMap = cachedNormalMap ?? GlobeTextureGenerator.generateNormalMap() {
+            cachedNormalMap = normalMap
             material.normal.contents = normalMap
-            material.normal.intensity = 0.7
+            material.normal.intensity = 0.5
         }
 
-        // Clay PBR: very rough, non-metallic
+        // UV overlay as emission (self-illuminated glow on top of clay)
+        if let uvOverlay = currentUVOverlay {
+            material.emission.contents = uvOverlay
+            material.emission.intensity = 1.2
+        }
+
+        // Clay PBR
         material.roughness.contents = 0.88
         material.metalness.contents = 0.01
 
-        // Shader modifier for subsurface scattering approximation
-        // Adds warm translucent glow at grazing angles
-        material.shaderModifiers = [
-            .fragment: """
-            // Clay SSS approximation: warm glow at edges
-            float3 viewDir = normalize(_surface.view);
-            float3 norm = normalize(_surface.normal);
-            float fresnel = pow(1.0 - max(dot(viewDir, norm), 0.0), 3.0);
-            float3 sssColor = float3(0.85, 0.55, 0.35) * fresnel * 0.15;
-            _output.color.rgb += sssColor;
-            """
-        ]
+        // Topographic displacement — land raised, oceans depressed
+        if let heightMap = cachedHeightMap ?? GlobeTextureGenerator.generateHeightMap() {
+            cachedHeightMap = heightMap
+            material.displacement.contents = heightMap
+            material.displacement.intensity = 0.04
+        }
+
+        // Stronger SSS approximation — warm clay glow at edges
+        applySSSShader(to: material)
 
         material.isDoubleSided = false
         globeNode.geometry?.materials = [material]
     }
 
-    // MARK: - UV Overlay Material
-
-    func applyUVOverlayMaterial() {
+    func applyProceduralMaterial(isDark: Bool) {
         let material = SCNMaterial()
-        material.lightingModel = .constant
-        material.diffuse.contents = NSColor.clear
-        material.emission.contents = NSColor.clear
-        material.transparent.contents = NSColor.white
-        material.transparency = 1.0
-        material.isDoubleSided = false
-        material.blendMode = .add
-        material.writesToDepthBuffer = false
-        material.readsFromDepthBuffer = true
-        uvOverlayNode.geometry?.materials = [material]
-    }
+        material.lightingModel = .physicallyBased
 
-    /// Update UV overlay with user location data.
-    func updateUVOverlay(userLat: Double, userLon: Double, userUVI: Double) {
-        guard let overlay = GlobeTextureGenerator.generateUVOverlay(
-            userLat: userLat, userLon: userLon, userUVI: userUVI
-        ) else { return }
-
-        if let material = uvOverlayNode.geometry?.firstMaterial {
-            material.emission.contents = overlay
-            material.transparent.contents = overlay
-            material.transparency = 0.0
+        if let baseTexture = GlobeTextureGenerator.generateBaseTexture(isDark: isDark) {
+            material.diffuse.contents = baseTexture
+        } else {
+            material.diffuse.contents = isDark
+                ? NSColor(red: 0.52, green: 0.48, blue: 0.44, alpha: 1)
+                : NSColor(red: 0.76, green: 0.42, blue: 0.30, alpha: 1)
         }
+
+        if let normalMap = cachedNormalMap ?? GlobeTextureGenerator.generateNormalMap() {
+            cachedNormalMap = normalMap
+            material.normal.contents = normalMap
+            material.normal.intensity = 0.5
+        }
+
+        if let uvOverlay = currentUVOverlay {
+            material.emission.contents = uvOverlay
+            material.emission.intensity = 1.2
+        }
+
+        material.roughness.contents = 0.88
+        material.metalness.contents = 0.01
+
+        // Topographic displacement
+        if let heightMap = cachedHeightMap ?? GlobeTextureGenerator.generateHeightMap() {
+            cachedHeightMap = heightMap
+            material.displacement.contents = heightMap
+            material.displacement.intensity = 0.04
+        }
+
+        applySSSShader(to: material)
+        material.isDoubleSided = false
+        globeNode.geometry?.materials = [material]
     }
 
-    /// Batch update with multiple global UV grid points.
+    /// Shared SSS shader — warm fresnel glow at grazing angles
+    private func applySSSShader(to material: SCNMaterial) {
+        material.shaderModifiers = [
+            .fragment: """
+            float3 viewDir = normalize(_surface.view);
+            float3 norm = normalize(_surface.normal);
+            float fresnel = pow(1.0 - max(dot(viewDir, norm), 0.0), 2.5);
+            float3 sssWarm = float3(0.92, 0.58, 0.38) * fresnel * 0.25;
+            float3 sssCool = float3(0.45, 0.55, 0.70) * fresnel * 0.08;
+            _output.color.rgb += sssWarm + sssCool;
+            """
+        ]
+    }
+
+    // MARK: - UV Overlay (emission on main material)
+
+    func updateUVOverlay(userLat: Double, userLon: Double, userUVI: Double) {
+        currentUVOverlay = GlobeTextureGenerator.generateUVOverlay(
+            userLat: userLat, userLon: userLon, userUVI: userUVI
+        )
+        applyUVEmission()
+    }
+
     func updateUVOverlayWithGrid(_ points: [(lat: Double, lon: Double, uvi: Double)],
                                   userLat: Double? = nil, userLon: Double? = nil, userUVI: Double? = nil) {
-        guard let overlay = GlobeTextureGenerator.generateUVOverlay(
+        currentUVOverlay = GlobeTextureGenerator.generateUVOverlay(
             uvPoints: points, userLat: userLat, userLon: userLon, userUVI: userUVI
-        ) else { return }
+        )
+        applyUVEmission()
+    }
 
-        if let material = uvOverlayNode.geometry?.firstMaterial {
-            material.emission.contents = overlay
-            material.transparent.contents = overlay
-            material.transparency = 0.0
+    /// Apply the current UV overlay to the emission channel without rebuilding the full material.
+    private func applyUVEmission() {
+        guard let material = globeNode.geometry?.firstMaterial else { return }
+        material.emission.contents = currentUVOverlay
+        material.emission.intensity = 1.2
+        startUVPulse()
+    }
+
+    /// Subtle breathing pulse on UV glow — high-UV spots gently brighten/dim.
+    func startUVPulse() {
+        globeNode.removeAction(forKey: "uvPulse")
+        let pulseUp = SCNAction.customAction(duration: 2.0) { node, elapsed in
+            guard let mat = node.geometry?.firstMaterial else { return }
+            let t = elapsed / 2.0
+            mat.emission.intensity = 1.0 + CGFloat(0.4 * sin(Double(t) * .pi))
         }
+        let pulseDown = SCNAction.customAction(duration: 2.0) { node, elapsed in
+            guard let mat = node.geometry?.firstMaterial else { return }
+            let t = elapsed / 2.0
+            mat.emission.intensity = 1.0 + CGFloat(0.4 * sin(Double(t) * .pi + .pi))
+        }
+        let sequence = SCNAction.sequence([pulseUp, pulseDown])
+        globeNode.runAction(SCNAction.repeatForever(sequence), forKey: "uvPulse")
     }
 
-    // MARK: - Appearance
-
-    func updateAppearance() {
-        applyClayMaterial(isDark: isDarkMode)
-    }
-
-    // MARK: - Auto-Rotation
+    // MARK: - Rotation
 
     func startIdleRotation() {
         globeNode.removeAction(forKey: "idleRotation")
         let rotation = SCNAction.rotateBy(x: 0, y: .pi * 2, z: 0, duration: 120)
-        let forever = SCNAction.repeatForever(rotation)
-        forever.timingMode = .linear
-        globeNode.runAction(forever, forKey: "idleRotation")
+        globeNode.runAction(SCNAction.repeatForever(rotation), forKey: "idleRotation")
     }
 
     func stopIdleRotation() {
@@ -221,6 +269,41 @@ final class GlobeScene: ObservableObject {
         globeNode.action(forKey: "idleRotation") != nil
     }
 
+    // MARK: - Squish Animation
+
+    /// Fun clay squish: scale down then bounce back — like squeezing the globe.
+    func squish() {
+        globeNode.removeAction(forKey: "squish")
+        let squishDown = SCNAction.scale(to: 0.88, duration: 0.1)
+        squishDown.timingMode = .easeIn
+        let bounceUp = SCNAction.scale(to: 1.05, duration: 0.15)
+        bounceUp.timingMode = .easeOut
+        let settle = SCNAction.scale(to: 1.0, duration: 0.2)
+        settle.timingMode = .easeInEaseOut
+        globeNode.runAction(SCNAction.sequence([squishDown, bounceUp, settle]), forKey: "squish")
+    }
+
+    // MARK: - Export
+
+    /// Capture the current globe view as a PNG and save via NSSavePanel.
+    func exportPNG(from view: SCNView) {
+        let snapshot = view.snapshot()
+        guard let tiffData = snapshot.tiffRepresentation,
+              let bitmapRep = NSBitmapImageRep(data: tiffData),
+              let pngData = bitmapRep.representation(using: .png, properties: [:]) else { return }
+
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.png]
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd-HHmm"
+        panel.nameFieldStringValue = "ClayRay-\(formatter.string(from: Date())).png"
+        panel.begin { response in
+            if response == .OK, let url = panel.url {
+                try? pngData.write(to: url)
+            }
+        }
+    }
+
     // MARK: - Hit Testing
 
     func hitTestGlobe(at point: CGPoint, in view: SCNView) -> (lat: Double, lon: Double)? {
@@ -228,15 +311,12 @@ final class GlobeScene: ObservableObject {
             .searchMode: SCNHitTestSearchMode.closest.rawValue,
             .ignoreHiddenNodes: true
         ])
-
         guard let hit = hits.first(where: { $0.node == globeNode }) else { return nil }
 
         let local = hit.localCoordinates
         let r = Double(AppConstants.globeRadius)
-
         let lat = asin(Double(local.y) / r) * 180 / .pi
         let lon = atan2(Double(local.x), Double(local.z)) * 180 / .pi
-
         return (lat: lat, lon: lon)
     }
 }

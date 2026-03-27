@@ -11,6 +11,9 @@ final class CameraController: ObservableObject {
     private weak var globeNode: SCNNode?
     private weak var scnView: SCNView?
 
+    // Globe center offset (globe is shifted up slightly to avoid HUD clipping)
+    private let globeCenter = SCNVector3(0, 0.15, 0)
+
     // Orbit state
     private var orbitAngleX: CGFloat = 0
     private var orbitAngleY: CGFloat = 0.3
@@ -52,15 +55,16 @@ final class CameraController: ObservableObject {
         zoomDistance = AppConstants.cameraDistance
         animateCameraTo(
             position: computeCameraPosition(),
-            lookAt: SCNVector3Zero,
+            lookAt: globeCenter,
             duration: 0.6
         )
     }
 
-    // MARK: - GTA-Style Two-Phase Dive Animation
+    // MARK: - Three-Phase Cinematic Dive Animation
 
-    /// Phase 1 (0.4s): Arc upward + rotate globe so target faces camera
-    /// Phase 2 (0.8s): Zoom in close with ease-in-out
+    /// Phase 1 (0.3s): Orbit + tilt so target rotates toward camera
+    /// Phase 2 (0.4s): Pull back for dramatic parallax
+    /// Phase 3 (0.5s): Fast zoom-in to surface with motion blur
     func diveToLocation(lat: Double, lon: Double, completion: @escaping () -> Void) {
         guard !isDiving else { return }
         isDiving = true
@@ -72,51 +76,81 @@ final class CameraController: ObservableObject {
         let targetOnSurface = latLonToPosition(lat: lat, lon: lon, radius: AppConstants.globeRadius)
         let r = AppConstants.globeRadius
 
-        // Normalize to get direction
+        // Normalize to get direction from globe center
         let nx = targetOnSurface.x / r
         let ny = targetOnSurface.y / r
         let nz = targetOnSurface.z / r
 
-        // Phase 1 destination: pull back + arc upward
-        let arcDistance: CGFloat = zoomDistance * 1.15  // Pull back slightly
-        let arcHeight: CGFloat = 0.4  // Arc up
+        // Phase 1 destination: orbit/tilt toward target, slight pull-back
+        let orbitDistance: CGFloat = zoomDistance * 1.05
+        let orbitPosition = SCNVector3(
+            nx * orbitDistance * 0.6 + globeCenter.x,
+            ny * orbitDistance * 0.6 + 0.2 + globeCenter.y,
+            nz * orbitDistance * 0.6 + orbitDistance * 0.6 + globeCenter.z
+        )
+
+        // Phase 2 destination: dramatic pull-back arc
+        let arcDistance: CGFloat = zoomDistance * 1.3
         let arcPosition = SCNVector3(
-            nx * arcDistance * 0.5,
-            ny * arcDistance * 0.5 + arcHeight,
-            nz * arcDistance * 0.5 + arcDistance * 0.7
+            nx * arcDistance * 0.4 + globeCenter.x,
+            ny * arcDistance * 0.4 + 0.5 + globeCenter.y,
+            nz * arcDistance * 0.4 + arcDistance * 0.8 + globeCenter.z
         )
 
-        // Phase 2 destination: close to surface, hovering over target
-        let hoverDistance: CGFloat = 1.75
+        // Phase 3 destination: close hover over target
+        let hoverDistance: CGFloat = 1.4
         let finalPosition = SCNVector3(
-            nx * hoverDistance,
-            ny * hoverDistance,
-            nz * hoverDistance
+            nx * hoverDistance + globeCenter.x,
+            ny * hoverDistance + globeCenter.y,
+            nz * hoverDistance + globeCenter.z
         )
 
-        // Phase 1: Arc up and rotate (0.4s)
+        // Enable motion blur during dive
+        cameraNode?.camera?.motionBlurIntensity = 0.6
+
+        // Phase 1: Orbit + tilt (0.3s)
         SCNTransaction.begin()
-        SCNTransaction.animationDuration = 0.4
+        SCNTransaction.animationDuration = 0.3
         SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeIn)
 
-        cameraNode?.position = arcPosition
-        cameraNode?.look(at: SCNVector3Zero)
+        cameraNode?.position = orbitPosition
+        cameraNode?.look(at: globeCenter)
 
         SCNTransaction.completionBlock = { [weak self] in
-            // Phase 2: Zoom in to surface (0.8s)
+            guard let self else { return }
+
+            // Phase 2: Pull-back arc (0.4s)
             SCNTransaction.begin()
-            SCNTransaction.animationDuration = 0.8
-            SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeOut)
+            SCNTransaction.animationDuration = 0.4
+            SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
 
-            self?.cameraNode?.position = finalPosition
-            self?.cameraNode?.look(at: SCNVector3Zero)
+            self.cameraNode?.position = arcPosition
+            self.cameraNode?.look(at: self.globeCenter)
 
-            SCNTransaction.completionBlock = {
-                Task { @MainActor in
-                    self?.isDiving = false
-                    self?.isDetailView = true
-                    completion()
+            SCNTransaction.completionBlock = { [weak self] in
+                guard let self else { return }
+
+                // Phase 3: Fast zoom-in (0.5s)
+                SCNTransaction.begin()
+                SCNTransaction.animationDuration = 0.5
+                SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeOut)
+
+                self.cameraNode?.position = finalPosition
+                self.cameraNode?.look(at: self.globeCenter)
+                // Widen FOV for more dramatic close-up
+                self.cameraNode?.camera?.fieldOfView = 50
+
+                SCNTransaction.completionBlock = { [weak self] in
+                    Task { @MainActor in
+                        // Disable motion blur after landing
+                        self?.cameraNode?.camera?.motionBlurIntensity = 0
+                        self?.isDiving = false
+                        self?.isDetailView = true
+                        completion()
+                    }
                 }
+
+                SCNTransaction.commit()
             }
 
             SCNTransaction.commit()
@@ -125,7 +159,7 @@ final class CameraController: ObservableObject {
         SCNTransaction.commit()
     }
 
-    /// Reverse: smooth zoom-out back to full globe.
+    /// Reverse: smooth zoom-out back to full globe with motion blur.
     func diveOut(completion: @escaping () -> Void) {
         guard isDetailView else { return }
         isDiving = true
@@ -136,15 +170,21 @@ final class CameraController: ObservableObject {
 
         let destination = computeCameraPosition()
 
+        // Motion blur during pull-out
+        cameraNode?.camera?.motionBlurIntensity = 0.4
+
         SCNTransaction.begin()
         SCNTransaction.animationDuration = 1.0
         SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
 
         cameraNode?.position = destination
-        cameraNode?.look(at: SCNVector3Zero)
+        cameraNode?.look(at: globeCenter)
+        // Restore default FOV
+        cameraNode?.camera?.fieldOfView = 40
 
         SCNTransaction.completionBlock = { [weak self] in
             Task { @MainActor in
+                self?.cameraNode?.camera?.motionBlurIntensity = 0
                 self?.isDiving = false
                 self?.isDetailView = false
                 completion()
@@ -158,13 +198,13 @@ final class CameraController: ObservableObject {
 
     private func updateCameraPosition() {
         cameraNode?.position = computeCameraPosition()
-        cameraNode?.look(at: SCNVector3Zero)
+        cameraNode?.look(at: globeCenter)
     }
 
     private func computeCameraPosition() -> SCNVector3 {
-        let x = zoomDistance * cos(orbitAngleY) * sin(orbitAngleX)
-        let y = zoomDistance * sin(orbitAngleY)
-        let z = zoomDistance * cos(orbitAngleY) * cos(orbitAngleX)
+        let x = zoomDistance * cos(orbitAngleY) * sin(orbitAngleX) + globeCenter.x
+        let y = zoomDistance * sin(orbitAngleY) + globeCenter.y
+        let z = zoomDistance * cos(orbitAngleY) * cos(orbitAngleX) + globeCenter.z
         return SCNVector3(x, y, z)
     }
 

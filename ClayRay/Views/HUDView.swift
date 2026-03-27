@@ -6,6 +6,7 @@ struct HUDView: View {
     let locationName: String
     let onMyLocation: () -> Void
     let onResetOrbit: () -> Void
+    let onExportPNG: () -> Void
     let onSettings: () -> Void
     @State private var isHovered = false
 
@@ -50,6 +51,9 @@ struct HUDView: View {
                 }
                 hudButton(label: "Reset View", systemImage: "arrow.counterclockwise", shortcut: nil) {
                     onResetOrbit()
+                }
+                hudButton(label: "Export", systemImage: "square.and.arrow.up", shortcut: nil) {
+                    onExportPNG()
                 }
                 Spacer()
                 hudButton(label: "Settings", systemImage: "gearshape.fill", shortcut: nil) {

@@ -4,6 +4,7 @@ import SwiftUI
 struct DetailView: View {
     let uvData: UVData
     let locationName: String
+    let isLoading: Bool
     let onBack: () -> Void
 
     @Environment(\.colorScheme) var colorScheme
@@ -40,9 +41,14 @@ struct DetailView: View {
 
             Divider()
 
-            // Main content
             ScrollView {
                 VStack(spacing: 20) {
+                    if isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                            .padding(.top, 20)
+                    }
+
                     currentUVCard
                     hourlyForecastCard
                     dailyPeaksCard
@@ -66,21 +72,14 @@ struct DetailView: View {
                     .font(ClayFonts.rounded(56, weight: .bold))
                     .foregroundColor(ClayColors.uvColor(for: uvData.currentUVI))
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(uvData.uvLevel.rawValue)
-                        .font(ClayFonts.rounded(22, weight: .semibold))
-                        .foregroundStyle(.primary)
-
-                    Text(uvData.uvLevel.summary)
-                        .font(ClayFonts.rounded(13, weight: .regular))
-                        .foregroundStyle(.secondary)
-                }
+                Text(uvData.uvLevel.rawValue)
+                    .font(ClayFonts.rounded(22, weight: .semibold))
+                    .foregroundStyle(.primary)
 
                 Spacer()
             }
 
             HStack(spacing: 8) {
-                // Single trend indicator: icon + label
                 HStack(spacing: 4) {
                     Image(systemName: uvData.trend.symbol)
                         .font(.system(size: 12, weight: .semibold))
@@ -106,14 +105,10 @@ struct DetailView: View {
             }
         }
         .padding(20)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(colorScheme == .dark ? Color.white.opacity(0.05) : Color.white.opacity(0.7))
-                .shadow(color: .black.opacity(0.08), radius: 8, y: 4)
-        )
+        .background(cardBackground)
     }
 
-    // MARK: - Hourly Forecast
+    // MARK: - Hourly Forecast (fixed baseline bar chart)
 
     private var hourlyForecastCard: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -122,10 +117,9 @@ struct DetailView: View {
                 .foregroundStyle(.secondary)
                 .tracking(1)
 
-            // Show next 12 hours with UV > 0, or all if fewer than 12
             let upcoming = Array(
                 uvData.hourlyForecast
-                    .filter { $0.time > Date().addingTimeInterval(-3600) } // include current hour
+                    .filter { $0.time > Date().addingTimeInterval(-3600) }
                     .prefix(24)
             )
             let display = upcoming.isEmpty ? Array(uvData.hourlyForecast.prefix(12)) : Array(upcoming.prefix(12))
@@ -137,40 +131,21 @@ struct DetailView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 20)
             } else {
+                let maxUVI = max(display.map(\.uvi).max() ?? 1, 1)
+                let barAreaHeight: CGFloat = 64
+
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
+                    HStack(alignment: .bottom, spacing: 6) {
                         ForEach(display) { hour in
-                            hourlyBar(hour: hour, maxUVI: display.map(\.uvi).max() ?? 1)
+                            HourlyBarView(hour: hour, maxUVI: maxUVI, barAreaHeight: barAreaHeight)
                         }
                     }
                     .padding(.horizontal, 4)
-                    .padding(.vertical, 4)
                 }
             }
         }
         .padding(20)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(colorScheme == .dark ? Color.white.opacity(0.05) : Color.white.opacity(0.7))
-                .shadow(color: .black.opacity(0.08), radius: 8, y: 4)
-        )
-    }
-
-    private func hourlyBar(hour: HourlyUV, maxUVI: Double) -> some View {
-        VStack(spacing: 4) {
-            Text(hour.uvi.uvFormatted)
-                .font(ClayFonts.rounded(10, weight: .semibold))
-                .foregroundColor(ClayColors.uvColor(for: hour.uvi))
-
-            RoundedRectangle(cornerRadius: 4)
-                .fill(ClayColors.uvColor(for: hour.uvi).opacity(0.85))
-                .frame(width: 26, height: max(6, CGFloat(hour.uvi / max(maxUVI, 1)) * 56))
-
-            Text(hour.time.hourString)
-                .font(ClayFonts.rounded(9))
-                .foregroundStyle(.secondary)
-        }
-        .frame(width: 34)
+        .background(cardBackground)
     }
 
     // MARK: - Daily Peaks
@@ -198,25 +173,80 @@ struct DetailView: View {
             }
         }
         .padding(20)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .fill(colorScheme == .dark ? Color.white.opacity(0.05) : Color.white.opacity(0.7))
-                .shadow(color: .black.opacity(0.08), radius: 8, y: 4)
-        )
+        .background(cardBackground)
     }
 
     private func daySunDisc(day: DailyPeak) -> some View {
+        SunDiscView(day: day)
+    }
+
+    private var cardBackground: some View {
+        RoundedRectangle(cornerRadius: 16)
+            .fill(colorScheme == .dark ? Color.white.opacity(0.05) : Color.white.opacity(0.7))
+            .shadow(color: .black.opacity(0.08), radius: 8, y: 4)
+    }
+}
+
+// MARK: - Hover-animated hourly bar
+
+private struct HourlyBarView: View {
+    let hour: HourlyUV
+    let maxUVI: Double
+    let barAreaHeight: CGFloat
+    @State private var isHovered = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text(hour.uvi.uvFormatted)
+                .font(ClayFonts.rounded(10, weight: .semibold))
+                .foregroundColor(ClayColors.uvColor(for: hour.uvi))
+                .frame(height: 14)
+                .padding(.bottom, 2)
+
+            ZStack(alignment: .bottom) {
+                Color.clear
+                    .frame(width: 26, height: barAreaHeight)
+
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(ClayColors.uvColor(for: hour.uvi).opacity(isHovered ? 1.0 : 0.85))
+                    .frame(
+                        width: 26,
+                        height: max(4, CGFloat(hour.uvi / maxUVI) * barAreaHeight)
+                    )
+                    .shadow(color: isHovered ? ClayColors.uvColor(for: hour.uvi).opacity(0.5) : .clear, radius: 6)
+            }
+
+            Text(hour.time.hourString)
+                .font(ClayFonts.rounded(9))
+                .foregroundStyle(.secondary)
+                .frame(height: 14)
+                .padding(.top, 4)
+        }
+        .frame(width: 34)
+        .scaleEffect(isHovered ? 1.12 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isHovered)
+        .onHover { hovering in isHovered = hovering }
+    }
+}
+
+// MARK: - Hover-animated sun disc
+
+private struct SunDiscView: View {
+    let day: DailyPeak
+    @State private var isHovered = false
+
+    var body: some View {
+        let size = max(30, min(54, CGFloat(day.maxUVI) * 5))
         VStack(spacing: 6) {
-            let size = max(30, min(54, CGFloat(day.maxUVI) * 5))
             ZStack {
                 Circle()
-                    .fill(ClayColors.uvColor(for: day.maxUVI).opacity(0.25))
+                    .fill(ClayColors.uvColor(for: day.maxUVI).opacity(isHovered ? 0.4 : 0.25))
                     .frame(width: size + 10, height: size + 10)
 
                 Circle()
                     .fill(ClayColors.uvColor(for: day.maxUVI))
                     .frame(width: size, height: size)
-                    .shadow(color: ClayColors.uvColor(for: day.maxUVI).opacity(0.4), radius: 5)
+                    .shadow(color: ClayColors.uvColor(for: day.maxUVI).opacity(isHovered ? 0.7 : 0.4), radius: isHovered ? 10 : 5)
 
                 Text(day.maxUVI.uvFormatted)
                     .font(ClayFonts.rounded(12, weight: .bold))
@@ -227,5 +257,8 @@ struct DetailView: View {
                 .font(ClayFonts.rounded(11, weight: .medium))
                 .foregroundStyle(.secondary)
         }
+        .scaleEffect(isHovered ? 1.1 : 1.0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isHovered)
+        .onHover { hovering in isHovered = hovering }
     }
 }

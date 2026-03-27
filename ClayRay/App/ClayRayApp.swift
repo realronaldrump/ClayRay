@@ -8,9 +8,11 @@ struct ClayRayApp: App {
     @AppStorage("apiKey") private var apiKey: String = ""
 
     var body: some Scene {
-        // Main window
+        // Main window — shares uvService and locationManager with ContentView
         WindowGroup {
             ContentView()
+                .environmentObject(uvService)
+                .environmentObject(locationManager)
                 .frame(
                     minWidth: 600, idealWidth: AppConstants.defaultWindowWidth,
                     minHeight: 400, idealHeight: AppConstants.defaultWindowHeight

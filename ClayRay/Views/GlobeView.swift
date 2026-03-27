@@ -15,6 +15,7 @@ struct GlobeView: NSViewRepresentable {
     @ObservedObject var globeScene: GlobeScene
     @ObservedObject var cameraController: CameraController
     var onLocationClicked: ((Double, Double) -> Void)?
+    var onViewReady: ((SCNView) -> Void)?
 
     func makeNSView(context: Context) -> GlobeScrollView {
         let scnView = GlobeScrollView()
@@ -57,6 +58,7 @@ struct GlobeView: NSViewRepresentable {
         clickGesture.delegate = context.coordinator
 
         context.coordinator.scnView = scnView
+        DispatchQueue.main.async { onViewReady?(scnView) }
 
         return scnView
     }
@@ -109,6 +111,7 @@ struct GlobeView: NSViewRepresentable {
         }
 
         @objc func handleDoubleClick(_ gesture: NSClickGestureRecognizer) {
+            parent.globeScene.squish()
             parent.cameraController.resetOrbit()
         }
     }
