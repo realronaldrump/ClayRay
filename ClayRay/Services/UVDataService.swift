@@ -65,14 +65,22 @@ final class UVDataService: ObservableObject {
             }
         }
 
-        // Fetch concurrently
+        // Fetch concurrently with throttled concurrency to avoid TLS connection exhaustion
+        let maxConcurrent = 25
         await withTaskGroup(of: (Double, Double, Double)?.self) { group in
-            for (lat, lon) in coords {
+            for (i, (lat, lon)) in coords.enumerated() {
+                if i >= maxConcurrent {
+                    // Wait for one task to finish before adding another
+                    if let result = await group.next(), let r = result {
+                        points.append(r)
+                    }
+                }
                 group.addTask { [weak self] in
                     guard let self else { return nil }
                     return await self.fetchSingleUVI(lat: lat, lon: lon)
                 }
             }
+            // Collect remaining results
             for await result in group {
                 if let r = result {
                     points.append(r)
