@@ -72,7 +72,7 @@ enum SunPosition {
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return nil }
 
-        ctx.setFillColor(NSColor.white.cgColor)
+        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
         ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
 
         guard let data = ctx.data else { return nil }
