@@ -138,7 +138,7 @@ final class GlobeScene: ObservableObject {
         // UV overlay as emission (self-illuminated glow on top of clay)
         if let uvOverlay = currentUVOverlay {
             material.emission.contents = uvOverlay
-            material.emission.intensity = 1.2
+            material.emission.intensity = 0.8
         }
 
         // Clay PBR
@@ -232,25 +232,20 @@ final class GlobeScene: ObservableObject {
     private func applyUVEmission() {
         guard let material = globeNode.geometry?.firstMaterial else { return }
         material.emission.contents = currentUVOverlay
-        material.emission.intensity = 1.2
+        material.emission.intensity = 0.8
         startUVPulse()
     }
 
-    /// Subtle breathing pulse on UV glow — high-UV spots gently brighten/dim.
+    /// Subtle breathing pulse on UV glow — gently brighten/dim.
     func startUVPulse() {
         globeNode.removeAction(forKey: "uvPulse")
-        let pulseUp = SCNAction.customAction(duration: 2.0) { node, elapsed in
+        let pulse = SCNAction.customAction(duration: 4.0) { node, elapsed in
             guard let mat = node.geometry?.firstMaterial else { return }
-            let t = elapsed / 2.0
-            mat.emission.intensity = 1.0 + CGFloat(0.4 * sin(Double(t) * .pi))
+            let t = elapsed / 4.0
+            // Gentle oscillation: 0.7 to 0.9
+            mat.emission.intensity = 0.8 + CGFloat(0.1 * sin(Double(t) * 2.0 * .pi))
         }
-        let pulseDown = SCNAction.customAction(duration: 2.0) { node, elapsed in
-            guard let mat = node.geometry?.firstMaterial else { return }
-            let t = elapsed / 2.0
-            mat.emission.intensity = 1.0 + CGFloat(0.4 * sin(Double(t) * .pi + .pi))
-        }
-        let sequence = SCNAction.sequence([pulseUp, pulseDown])
-        globeNode.runAction(SCNAction.repeatForever(sequence), forKey: "uvPulse")
+        globeNode.runAction(SCNAction.repeatForever(pulse), forKey: "uvPulse")
     }
 
     // MARK: - Rotation

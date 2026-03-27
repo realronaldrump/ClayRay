@@ -38,7 +38,8 @@ final class CameraController: ObservableObject {
         let sensitivity: CGFloat = 0.005
         orbitAngleX += delta.width * sensitivity
         orbitAngleY -= delta.height * sensitivity
-        orbitAngleY = max(-.pi / 2 + 0.1, min(.pi / 2 - 0.1, orbitAngleY))
+        // Clamp to ±35° — keeps the globe upright, prevents disorienting tilt
+        orbitAngleY = max(-0.6, min(0.6, orbitAngleY))
         updateCameraPosition()
     }
 
@@ -192,6 +193,43 @@ final class CameraController: ObservableObject {
         }
 
         SCNTransaction.commit()
+    }
+
+    // MARK: - Keyboard Controls
+
+    func handleKeyboard(event: NSEvent) {
+        guard !isDiving && !isDetailView else { return }
+        let step: CGFloat = 0.08
+        let zoomStep: CGFloat = 0.3
+
+        switch event.keyCode {
+        case 123: // Left arrow
+            orbitAngleX -= step
+            updateCameraPosition()
+        case 124: // Right arrow
+            orbitAngleX += step
+            updateCameraPosition()
+        case 125: // Down arrow
+            orbitAngleY -= step
+            orbitAngleY = max(-0.6, orbitAngleY)
+            updateCameraPosition()
+        case 126: // Up arrow
+            orbitAngleY += step
+            orbitAngleY = min(0.6, orbitAngleY)
+            updateCameraPosition()
+        case 24, 69: // + or numpad +
+            zoomDistance -= zoomStep
+            zoomDistance = max(2.0, zoomDistance)
+            updateCameraPosition()
+        case 27, 78: // - or numpad -
+            zoomDistance += zoomStep
+            zoomDistance = min(8.0, zoomDistance)
+            updateCameraPosition()
+        case 15: // R key — reset orbit
+            resetOrbit()
+        default:
+            break
+        }
     }
 
     // MARK: - Helpers

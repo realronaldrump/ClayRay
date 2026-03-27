@@ -1,12 +1,23 @@
 import SwiftUI
 import SceneKit
 
-/// Custom SCNView subclass that forwards scroll wheel events for zoom control.
+/// Custom SCNView subclass that forwards scroll wheel and key events.
 class GlobeScrollView: SCNView {
     var onScrollWheel: ((CGFloat) -> Void)?
+    var onKeyDown: ((NSEvent) -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
 
     override func scrollWheel(with event: NSEvent) {
         onScrollWheel?(event.deltaY)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if let handler = onKeyDown {
+            handler(event)
+        } else {
+            super.keyDown(with: event)
+        }
     }
 }
 
@@ -30,6 +41,12 @@ struct GlobeView: NSViewRepresentable {
         scnView.onScrollWheel = { [weak cameraController] deltaY in
             Task { @MainActor in
                 cameraController?.handleZoom(delta: deltaY)
+            }
+        }
+
+        scnView.onKeyDown = { [weak cameraController] event in
+            Task { @MainActor in
+                cameraController?.handleKeyboard(event: event)
             }
         }
 
@@ -58,7 +75,10 @@ struct GlobeView: NSViewRepresentable {
         clickGesture.delegate = context.coordinator
 
         context.coordinator.scnView = scnView
-        DispatchQueue.main.async { onViewReady?(scnView) }
+        DispatchQueue.main.async {
+            onViewReady?(scnView)
+            scnView.window?.makeFirstResponder(scnView)
+        }
 
         return scnView
     }

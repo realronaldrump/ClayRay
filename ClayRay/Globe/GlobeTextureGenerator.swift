@@ -172,6 +172,12 @@ enum GlobeTextureGenerator {
             allPoints.append((lat: lat, lon: lon, uvi: uvi))
         }
 
+        // Determine if we have a user location to highlight
+        let isUserPoint: (Double, Double) -> Bool = { lat, lon in
+            guard let uLat = userLat, let uLon = userLon else { return false }
+            return abs(lat - uLat) < 1 && abs(lon - uLon) < 1
+        }
+
         for point in allPoints {
             guard point.uvi > 0.1 else { continue }
 
@@ -179,19 +185,22 @@ enum GlobeTextureGenerator {
             let x = CGFloat(uv.u * Double(width))
             let y = CGFloat((1 - uv.v) * Double(height))
             let uvi = point.uvi
+            let isUser = isUserPoint(point.lat, point.lon)
 
             let (r, g, b) = uvGlowRGB(for: uvi)
-            let radius = CGFloat(50 + uvi * 18)
-            let alpha = CGFloat(min(0.12 + uvi * 0.055, 0.75))
 
-            // Multi-ring radial glow
+            // Large soft radii so adjacent grid points blend into a smooth heatmap
+            let radius = CGFloat(80 + uvi * 25)
+            let alpha = CGFloat(min(0.06 + uvi * 0.025, 0.35))
+
+            // Soft radial glow — wide falloff for seamless blending
             let colors: [CGColor] = [
                 CGColor(red: r, green: g, blue: b, alpha: alpha),
-                CGColor(red: r, green: g, blue: b, alpha: alpha * 0.5),
-                CGColor(red: r, green: g, blue: b, alpha: alpha * 0.15),
+                CGColor(red: r, green: g, blue: b, alpha: alpha * 0.4),
+                CGColor(red: r, green: g, blue: b, alpha: alpha * 0.08),
                 CGColor(red: r, green: g, blue: b, alpha: 0)
             ]
-            let locations: [CGFloat] = [0, 0.3, 0.65, 1.0]
+            let locations: [CGFloat] = [0, 0.25, 0.6, 1.0]
 
             if let gradient = CGGradient(colorsSpace: colorSpace, colors: colors as CFArray, locations: locations) {
                 ctx.drawRadialGradient(
@@ -202,13 +211,13 @@ enum GlobeTextureGenerator {
                 )
             }
 
-            // Hot center spot for high UV
-            if uvi >= 4 {
-                let hotAlpha = CGFloat(min((uvi - 3) * 0.1, 0.5))
-                let hotRadius = radius * 0.25
+            // Hot center spot only for user's location or extreme UV
+            if isUser && uvi >= 3 {
+                let hotAlpha = CGFloat(min((uvi - 2) * 0.08, 0.4))
+                let hotRadius = radius * 0.2
                 let hotColors: [CGColor] = [
                     CGColor(red: 1, green: 1, blue: min(r + 0.5, 1), alpha: hotAlpha),
-                    CGColor(red: r, green: g, blue: b, alpha: hotAlpha * 0.3),
+                    CGColor(red: r, green: g, blue: b, alpha: hotAlpha * 0.2),
                     CGColor(red: r, green: g, blue: b, alpha: 0)
                 ]
                 let hotLocs: [CGFloat] = [0, 0.4, 1.0]
@@ -220,16 +229,11 @@ enum GlobeTextureGenerator {
                         options: []
                     )
                 }
-            }
 
-            // Cracks for high UV
-            if uvi >= 6 {
-                drawCracks(in: ctx, at: CGPoint(x: x, y: y), uvi: uvi, r: r, g: g, b: b)
-            }
-
-            // Particle sparks for extreme UV
-            if uvi >= 11 {
-                drawSparks(in: ctx, at: CGPoint(x: x, y: y), r: r, g: g, b: b)
+                // Cracks only at user location for extreme UV
+                if uvi >= 8 {
+                    drawCracks(in: ctx, at: CGPoint(x: x, y: y), uvi: uvi, r: r, g: g, b: b)
+                }
             }
         }
 
